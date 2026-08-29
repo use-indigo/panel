@@ -1,0 +1,77 @@
+import { z } from 'zod';
+import getUserActivity from '@/api/admin/users/getUserActivity.ts';
+import ActivityInfoButton from '@/elements/activity/ActivityInfoButton.tsx';
+import Code from '@/elements/Code.tsx';
+import AdminSubContentContainer from '@/elements/containers/AdminSubContentContainer.tsx';
+import Group from '@/elements/Group.tsx';
+import Table, { TableData, TableRow } from '@/elements/Table.tsx';
+import FormattedTimestamp from '@/elements/time/FormattedTimestamp.tsx';
+import { queryKeys } from '@/lib/queryKeys.ts';
+import { adminFullUserSchema } from '@/lib/schemas/admin/users.ts';
+import { useSearchablePaginatedTable } from '@/plugins/useSearchablePaginatedTable.ts';
+import { useTranslations } from '@/providers/TranslationProvider.tsx';
+
+export default function AdminUserActivity({ user }: { user: z.infer<typeof adminFullUserSchema> }) {
+  const { t } = useTranslations();
+
+  const {
+    data: userActivity,
+    loading,
+    error,
+    search,
+    setSearch,
+    setPage,
+  } = useSearchablePaginatedTable({
+    queryKey: queryKeys.admin.users.activity(user.uuid),
+    fetcher: (page, search) => getUserActivity(user.uuid, page, search),
+  });
+
+  return (
+    <AdminSubContentContainer
+      title={t('pages.admin.users.tabs.activity.page.title', {})}
+      titleOrder={2}
+      search={search}
+      setSearch={setSearch}
+      registry={window.extensionContext.extensionRegistry.pages.admin.users.view.activity.subContainer}
+      registryProps={{ user }}
+    >
+      <Table
+        columns={[
+          t('common.table.columns.actor', {}),
+          t('common.table.columns.event', {}),
+          t('common.table.columns.ip', {}),
+          t('common.table.columns.when', {}),
+          '',
+        ]}
+        loading={loading}
+        error={error}
+        pagination={userActivity}
+        onPageSelect={setPage}
+      >
+        {userActivity?.data.map((activity, index) => (
+          <TableRow key={`${activity.created.toISOString()}-${index}`}>
+            <TableData>{activity.isApi ? t('common.api', {}) : t('common.web', {})}</TableData>
+
+            <TableData>
+              <Code>{activity.event}</Code>
+            </TableData>
+
+            <TableData>
+              <Code>{activity.ip ? activity.ip : t('common.na', {})}</Code>
+            </TableData>
+
+            <TableData>
+              <FormattedTimestamp timestamp={activity.created} />
+            </TableData>
+
+            <TableData>
+              <Group gap={4} justify='right' wrap='nowrap'>
+                {Object.keys(activity.data ?? {}).length > 0 ? <ActivityInfoButton activity={activity} /> : null}
+              </Group>
+            </TableData>
+          </TableRow>
+        ))}
+      </Table>
+    </AdminSubContentContainer>
+  );
+}

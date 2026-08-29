@@ -1,0 +1,476 @@
+use crate::{models::UpdateQueryBuilder, prelude::*};
+use axum::http::StatusCode;
+use garde::Validate;
+use serde::{Deserialize, Serialize};
+use sqlx::{Row, postgres::PgRow};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, LazyLock},
+};
+use utoipa::ToSchema;
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ServerAllocation {
+    pub uuid: uuid::Uuid,
+    pub allocation: super::node_allocation::NodeAllocation,
+
+    pub notes: Option<compact_str::CompactString>,
+
+    pub created: chrono::NaiveDateTime,
+
+    extension_data: super::ModelExtensionData,
+}
+
+impl BaseModel for ServerAllocation {
+    const NAME: &'static str = "server_allocation";
+
+    fn get_extension_list() -> &'static super::ModelExtensionList {
+        static EXTENSIONS: LazyLock<super::ModelExtensionList> =
+            LazyLock::new(|| parking_lot::RwLock::new(Vec::new()));
+
+        &EXTENSIONS
+    }
+
+    fn get_extension_data(&self) -> &super::ModelExtensionData {
+        &self.extension_data
+    }
+
+    #[inline]
+    fn base_columns(prefix: Option<&str>) -> BTreeMap<&'static str, compact_str::CompactString> {
+        let prefix = prefix.unwrap_or_default();
+
+        let mut columns = BTreeMap::from([
+            (
+                "server_allocations.uuid",
+                compact_str::format_compact!("{prefix}uuid"),
+            ),
+            (
+                "server_allocations.notes",
+                compact_str::format_compact!("{prefix}notes"),
+            ),
+            (
+                "server_allocations.created",
+                compact_str::format_compact!("{prefix}created"),
+            ),
+        ]);
+
+        columns.extend(super::node_allocation::NodeAllocation::base_columns(Some(
+            "allocation_",
+        )));
+
+        columns
+    }
+
+    #[inline]
+    fn map(prefix: Option<&str>, row: &PgRow) -> Result<Self, crate::database::DatabaseError> {
+        let prefix = prefix.unwrap_or_default();
+
+        Ok(Self {
+            uuid: row.try_get(compact_str::format_compact!("{prefix}uuid").as_str())?,
+            allocation: super::node_allocation::NodeAllocation::map(Some("allocation_"), row)?,
+            notes: row.try_get(compact_str::format_compact!("{prefix}notes").as_str())?,
+            created: row.try_get(compact_str::format_compact!("{prefix}created").as_str())?,
+            extension_data: Self::map_extensions(prefix, row)?,
+        })
+    }
+}
+
+impl ServerAllocation {
+    pub async fn create(
+        database: &crate::database::Database,
+        server_uuid: uuid::Uuid,
+        allocation_uuid: uuid::Uuid,
+    ) -> Result<uuid::Uuid, crate::database::DatabaseError> {
+        let row = sqlx::query(
+            r#"
+            INSERT INTO server_allocations (server_uuid, allocation_uuid)
+            VALUES ($1, $2)
+            RETURNING uuid
+            "#,
+        )
+        .bind(server_uuid)
+        .bind(allocation_uuid)
+        .fetch_one(database.write())
+        .await?;
+
+        Ok(row.try_get("uuid")?)
+    }
+
+    pub async fn create_random(
+        state: &crate::State,
+        server: &super::server::Server,
+    ) -> Result<uuid::Uuid, crate::database::DatabaseError> {
+        let egg_configuration = server.egg.configuration(&state.database).await?;
+
+        let Some(config_allocations) = egg_configuration.config_allocations else {
+            return Err(anyhow::Error::new(
+                crate::response::DisplayError::new(
+                    "no egg allocation configuration found, cannot auto-assign allocation",
+                )
+                .with_status(StatusCode::EXPECTATION_FAILED),
+            )
+            .into());
+        };
+
+        let ip = server.allocation.as_ref().map(|a| a.allocation.ip);
+        let start_port = config_allocations.user_self_assign.start_port as i32;
+        let end_port = config_allocations.user_self_assign.end_port as i32;
+
+        let candidate_ips: Vec<sqlx::types::ipnetwork::IpNetwork> = sqlx::query_scalar(
+            r#"
+            SELECT DISTINCT node_allocations.ip
+            FROM node_allocations
+            LEFT JOIN server_allocations ON server_allocations.allocation_uuid = node_allocations.uuid
+            WHERE
+                node_allocations.node_uuid = $1
+                AND ($2 IS NULL OR node_allocations.ip = $2)
+                AND node_allocations.port BETWEEN $3 AND $4
+                AND server_allocations.uuid IS NULL
+            "#,
+        )
+        .bind(server.node.uuid)
+        .bind(ip)
+        .bind(start_port)
+        .bind(end_port)
+        .fetch_all(state.database.read())
+        .await?;
+
+        if candidate_ips.is_empty() {
+            return Err(anyhow::Error::new(
+                crate::response::DisplayError::new("no node allocations are available")
+                    .with_status(StatusCode::EXPECTATION_FAILED),
+            )
+            .into());
+        }
+
+        let exclude = match super::node_allocation::NodeAllocation::used_by_node(
+            state,
+            &server.node.fetch_cached(&state.database).await?,
+            &candidate_ips.iter().map(|ip| ip.ip()).collect::<Vec<_>>(),
+        )
+        .await
+        {
+            Ok(exclude) => exclude,
+            Err(err) => {
+                tracing::warn!(
+                    node = %server.node.uuid,
+                    "failed to resolve used ports, refusing to assign an allocation: {err:#}"
+                );
+
+                return Err(anyhow::Error::new(
+                    crate::response::DisplayError::new(
+                        "could not reach the node to check which ports are free",
+                    )
+                    .with_status(StatusCode::EXPECTATION_FAILED),
+                )
+                .into());
+            }
+        };
+
+        let row = sqlx::query(
+            r#"
+            INSERT INTO server_allocations (server_uuid, allocation_uuid)
+            VALUES ($1, (
+                SELECT node_allocations.uuid FROM node_allocations
+                LEFT JOIN server_allocations ON server_allocations.allocation_uuid = node_allocations.uuid
+                WHERE
+                    node_allocations.node_uuid = $2
+                    AND ($3 IS NULL OR node_allocations.ip = $3)
+                    AND node_allocations.port BETWEEN $4 AND $5
+                    AND server_allocations.uuid IS NULL
+                    AND NOT (node_allocations.uuid = ANY($6))
+                ORDER BY RANDOM()
+                LIMIT 1
+            ))
+            RETURNING uuid
+            "#,
+        )
+        .bind(server.uuid)
+        .bind(server.node.uuid)
+        .bind(ip)
+        .bind(start_port)
+        .bind(end_port)
+        .bind(&exclude)
+        .fetch_one(state.database.write())
+        .await;
+
+        let row = match row {
+            Ok(row) => row,
+            Err(err) if err.is_not_null_violation() => {
+                return Err(anyhow::Error::new(
+                    crate::response::DisplayError::new(
+                        "every free port on this node is currently in use",
+                    )
+                    .with_status(StatusCode::EXPECTATION_FAILED),
+                )
+                .into());
+            }
+            Err(err) => return Err(err.into()),
+        };
+
+        Ok(row.get("uuid"))
+    }
+
+    pub async fn by_uuid(
+        database: &crate::database::Database,
+        uuid: uuid::Uuid,
+    ) -> Result<Option<Self>, crate::database::DatabaseError> {
+        let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+            r#"
+            SELECT {}
+            FROM server_allocations
+            JOIN node_allocations ON server_allocations.allocation_uuid = node_allocations.uuid
+            WHERE server_allocations.uuid = $1
+            "#,
+            Self::columns_sql(None)
+        )))
+        .bind(uuid)
+        .fetch_optional(database.read())
+        .await?;
+
+        row.try_map(|row| Self::map(None, &row))
+    }
+
+    pub async fn by_server_uuid_uuid(
+        database: &crate::database::Database,
+        server_uuid: uuid::Uuid,
+        allocation_uuid: uuid::Uuid,
+    ) -> Result<Option<Self>, crate::database::DatabaseError> {
+        let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+            r#"
+            SELECT {}
+            FROM server_allocations
+            JOIN node_allocations ON server_allocations.allocation_uuid = node_allocations.uuid
+            WHERE server_allocations.server_uuid = $1 AND server_allocations.uuid = $2
+            "#,
+            Self::columns_sql(None)
+        )))
+        .bind(server_uuid)
+        .bind(allocation_uuid)
+        .fetch_optional(database.read())
+        .await?;
+
+        row.try_map(|row| Self::map(None, &row))
+    }
+
+    pub async fn by_server_uuid_with_pagination(
+        database: &crate::database::Database,
+        server_uuid: uuid::Uuid,
+        page: i64,
+        per_page: i64,
+        search: Option<&str>,
+    ) -> Result<super::Pagination<Self>, crate::database::DatabaseError> {
+        let offset = (page - 1) * per_page;
+
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+            r#"
+            SELECT {}, COUNT(*) OVER() AS total_count
+            FROM server_allocations
+            JOIN node_allocations ON server_allocations.allocation_uuid = node_allocations.uuid
+            WHERE server_allocations.server_uuid = $1
+                AND (
+                    $2 IS NULL
+                    OR host(node_allocations.ip) || ':' || node_allocations.port ILIKE '%' || $2 || '%'
+                    OR (node_allocations.ip_alias IS NOT NULL AND node_allocations.ip_alias || ':' || node_allocations.port ILIKE '%' || $2 || '%')
+                    OR server_allocations.notes ILIKE '%' || $2 || '%'
+                )
+            ORDER BY server_allocations.created
+            LIMIT $3 OFFSET $4
+            "#,
+            Self::columns_sql(None)
+        )))
+        .bind(server_uuid)
+        .bind(search)
+        .bind(per_page)
+        .bind(offset)
+        .fetch_all(database.read())
+        .await?;
+
+        Ok(super::Pagination {
+            total: rows
+                .first()
+                .map_or(Ok(0), |row| row.try_get("total_count"))?,
+            per_page,
+            page,
+            data: rows
+                .into_iter()
+                .map(|row| Self::map(None, &row))
+                .try_collect_vec()?,
+        })
+    }
+
+    pub async fn all_by_server_uuid(
+        database: &crate::database::Database,
+        server_uuid: uuid::Uuid,
+    ) -> Result<Vec<Self>, crate::database::DatabaseError> {
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+            r#"
+            SELECT {}
+            FROM server_allocations
+            JOIN node_allocations ON server_allocations.allocation_uuid = node_allocations.uuid
+            WHERE server_allocations.server_uuid = $1
+            ORDER BY server_allocations.created
+            "#,
+            Self::columns_sql(None)
+        )))
+        .bind(server_uuid)
+        .fetch_all(database.read())
+        .await?;
+
+        rows.into_iter()
+            .map(|row| Self::map(None, &row))
+            .try_collect_vec()
+    }
+
+    pub async fn count_by_server_uuid(
+        database: &crate::database::Database,
+        server_uuid: uuid::Uuid,
+    ) -> Result<i64, sqlx::Error> {
+        sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM server_allocations
+            WHERE server_allocations.server_uuid = $1
+            "#,
+        )
+        .bind(server_uuid)
+        .fetch_one(database.read())
+        .await
+    }
+}
+
+#[async_trait::async_trait]
+impl IntoApiObject for ServerAllocation {
+    type ApiObject = ApiServerAllocation;
+    type ExtraArgs<'a> = Option<uuid::Uuid>;
+
+    async fn into_api_object<'a>(
+        self,
+        state: &crate::State,
+        primary: Self::ExtraArgs<'a>,
+    ) -> Result<Self::ApiObject, crate::database::DatabaseError> {
+        let api_object = ApiServerAllocation::init_hooks(&self, state).await?;
+
+        let api_object = finish_extendible!(
+            ApiServerAllocation {
+                uuid: self.uuid,
+                ip: compact_str::format_compact!("{}", self.allocation.ip.ip()),
+                ip_alias: self.allocation.ip_alias,
+                port: self.allocation.port,
+                notes: self.notes,
+                is_primary: primary.is_some_and(|p| p == self.uuid),
+                created: self.created.and_utc(),
+            },
+            api_object,
+            state
+        )?;
+
+        Ok(api_object)
+    }
+}
+
+#[derive(ToSchema, Serialize, Deserialize, Validate, Default)]
+pub struct UpdateServerAllocationOptions {
+    #[garde(length(min = 1, max = 1024))]
+    #[schema(min_length = 1, max_length = 1024)]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "::serde_with::rust::double_option"
+    )]
+    pub notes: Option<Option<compact_str::CompactString>>,
+}
+
+#[async_trait::async_trait]
+impl UpdatableModel for ServerAllocation {
+    type UpdateOptions = UpdateServerAllocationOptions;
+
+    fn get_update_handlers() -> &'static LazyLock<UpdateHandlerList<Self>> {
+        static UPDATE_LISTENERS: LazyLock<UpdateHandlerList<ServerAllocation>> =
+            LazyLock::new(|| Arc::new(ModelHandlerList::default()));
+
+        &UPDATE_LISTENERS
+    }
+
+    async fn update_with_transaction(
+        &mut self,
+        state: &crate::State,
+        mut options: Self::UpdateOptions,
+        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), crate::database::DatabaseError> {
+        options.validate()?;
+
+        let mut query_builder = UpdateQueryBuilder::new("server_allocations");
+
+        self.run_update_handlers(&mut options, &mut query_builder, state, transaction)
+            .await?;
+
+        query_builder
+            .set("notes", options.notes.as_ref().map(|n| n.as_ref()))
+            .where_eq("uuid", self.uuid);
+
+        query_builder.execute(&mut **transaction).await?;
+
+        if let Some(notes) = options.notes {
+            self.notes = notes;
+        }
+
+        self.run_after_update_handlers(state, transaction).await?;
+
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl DeletableModel for ServerAllocation {
+    type DeleteOptions = ();
+
+    fn get_delete_handlers() -> &'static LazyLock<DeleteHandlerList<Self>> {
+        static DELETE_LISTENERS: LazyLock<DeleteHandlerList<ServerAllocation>> =
+            LazyLock::new(|| Arc::new(ModelHandlerList::default()));
+
+        &DELETE_LISTENERS
+    }
+
+    async fn delete_with_transaction(
+        &self,
+        state: &crate::State,
+        options: Self::DeleteOptions,
+        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), anyhow::Error> {
+        self.run_delete_handlers(&options, state, transaction)
+            .await?;
+
+        sqlx::query(
+            r#"
+            DELETE FROM server_allocations
+            WHERE server_allocations.uuid = $1
+            "#,
+        )
+        .bind(self.uuid)
+        .execute(&mut **transaction)
+        .await?;
+
+        self.run_after_delete_handlers(&options, state, transaction)
+            .await?;
+
+        Ok(())
+    }
+}
+
+#[schema_extension_derive::extendible]
+#[init_args(ServerAllocation, crate::State)]
+#[hook_args(crate::State)]
+#[derive(ToSchema, Serialize)]
+#[schema(title = "ServerAllocation")]
+pub struct ApiServerAllocation {
+    pub uuid: uuid::Uuid,
+
+    pub ip: compact_str::CompactString,
+    pub ip_alias: Option<compact_str::CompactString>,
+    pub port: i32,
+
+    pub notes: Option<compact_str::CompactString>,
+    pub is_primary: bool,
+
+    pub created: chrono::DateTime<chrono::Utc>,
+}

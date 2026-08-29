@@ -1,0 +1,81 @@
+use super::State;
+use utoipa_axum::{router::OpenApiRouter, routes};
+
+mod delete {
+    use axum::{extract::Path, http::StatusCode};
+    use serde::Serialize;
+    use shared::{
+        ApiError, GetState,
+        models::{
+            server::{GetServer, GetServerActivityLogger},
+            user::GetPermissionManager,
+        },
+        response::{ApiResponse, ApiResponseResult},
+    };
+    use utoipa::ToSchema;
+
+    #[derive(ToSchema, Serialize)]
+    struct Response {}
+
+    #[utoipa::path(delete, path = "/", responses(
+        (status = OK, body = inline(Response)),
+        (status = UNAUTHORIZED, body = ApiError),
+        (status = NOT_FOUND, body = ApiError),
+        (status = EXPECTATION_FAILED, body = ApiError),
+    ), params(
+        (
+            "server" = uuid::Uuid,
+            description = "The server ID",
+            example = "123e4567-e89b-12d3-a456-426614174000",
+        ),
+        (
+            "operation" = uuid::Uuid,
+            description = "The operation ID",
+            example = "123e4567-e89b-12d3-a456-426614174000",
+        )
+    ))]
+    pub async fn route(
+        state: GetState,
+        permissions: GetPermissionManager,
+        server: GetServer,
+        activity_logger: GetServerActivityLogger,
+        Path((_server, operation)): Path<(String, uuid::Uuid)>,
+    ) -> ApiResponseResult {
+        permissions.has_server_permission("files.update")?;
+
+        match server
+            .node
+            .fetch_cached(&state.database)
+            .await?
+            .api_client(&state.database)
+            .await?
+            .delete_servers_server_files_operations_operation(server.uuid, operation)
+            .await
+        {
+            Ok(_) => {}
+            Err(wings_api::client::ApiHttpError::Http(StatusCode::NOT_FOUND, err)) => {
+                return ApiResponse::new_serialized(ApiError::new_wings_value(err))
+                    .with_status(StatusCode::NOT_FOUND)
+                    .ok();
+            }
+            Err(err) => return Err(err.into()),
+        };
+
+        activity_logger
+            .log(
+                "server:file.operation.cancel",
+                serde_json::json!({
+                    "identifier": operation,
+                }),
+            )
+            .await;
+
+        ApiResponse::new_serialized(Response {}).ok()
+    }
+}
+
+pub fn router(state: &State) -> OpenApiRouter<State> {
+    OpenApiRouter::new()
+        .routes(routes!(delete::route))
+        .with_state(state.clone())
+}

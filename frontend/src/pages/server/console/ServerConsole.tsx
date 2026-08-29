@@ -1,0 +1,57 @@
+import { ServerCan } from '@/elements/Can.tsx';
+import ServerContentContainer from '@/elements/containers/ServerContentContainer.tsx';
+import Group from '@/elements/Group.tsx';
+import Title from '@/elements/Title.tsx';
+import { useVisualViewportBottomInset } from '@/plugins/useVisualViewport.ts';
+import { useTranslations } from '@/providers/TranslationProvider.tsx';
+import { useServerStore } from '@/stores/server.ts';
+import ServerDetails from './stats/ServerDetails.tsx';
+import ServerPowerControls from './stats/ServerPowerControls.tsx';
+import ServerStats from './stats/ServerStats.tsx';
+import Console from './terminal/Console.tsx';
+
+export default function ServerConsole() {
+  const { t } = useTranslations();
+  const server = useServerStore((state) => state.server);
+  const keyboardInset = useVisualViewportBottomInset();
+
+  return (
+    <ServerContentContainer
+      title={t('pages.server.console.title', {})}
+      hideTitleComponent
+      registry={window.extensionContext.extensionRegistry.pages.server.console.container}
+    >
+      <div
+        id='console-infobar'
+        className='sticky top-0 z-20 bg-(--mantine-color-body) mb-4 py-2 -mx-4 lg:-mx-6 px-4 lg:px-6'
+      >
+        <Group justify='space-between'>
+          <div className='flex flex-col'>
+            <Title order={1}>{server.name}</Title>
+            <p className='text-sm text-(--mantine-color-dimmed)!'>{server.description}</p>
+          </div>
+          <ServerCan action={['control.start', 'control.stop', 'control.restart']} matchAny>
+            <ServerPowerControls />
+          </ServerCan>
+        </Group>
+      </div>
+
+      <div className='grid xl:grid-cols-4 gap-4 mb-4'>
+        <div
+          className='xl:col-span-3 flex flex-col h-[60vh] xl:h-auto'
+          style={
+            keyboardInset > 0 ? { height: `max(8rem, min(60vh, calc(100dvh - ${keyboardInset}px - 7rem)))` } : undefined
+          }
+        >
+          <Console />
+        </div>
+
+        <div className='flex flex-col min-w-0'>
+          <ServerDetails />
+        </div>
+      </div>
+
+      <ServerStats />
+    </ServerContentContainer>
+  );
+}

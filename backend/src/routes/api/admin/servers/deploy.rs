@@ -1,0 +1,388 @@
+use super::State;
+use utoipa_axum::{router::OpenApiRouter, routes};
+
+mod post {
+    use axum::http::StatusCode;
+    use garde::Validate;
+    use serde::{Deserialize, Serialize};
+    use shared::{
+        ApiError, GetState,
+        models::{
+            CreatableModel, IntoAdminApiObject, admin_activity::GetAdminActivityLogger,
+            nest_egg_variable::NestEggVariable, node::Node, node_allocation::NodeAllocation,
+            server::Server, user::GetPermissionManager,
+        },
+        response::{ApiResponse, ApiResponseResult},
+    };
+    use std::collections::HashMap;
+    use utoipa::ToSchema;
+
+    #[derive(ToSchema, Validate, Serialize, Deserialize)]
+    pub struct PayloadVariable {
+        #[garde(length(chars, min = 1, max = 255))]
+        #[schema(min_length = 1, max_length = 255)]
+        env_variable: String,
+        #[garde(length(max = 4096))]
+        #[schema(max_length = 4096)]
+        value: String,
+    }
+
+    fn default_suspension_penalty() -> f64 {
+        0.5
+    }
+
+    fn default_randomness() -> f64 {
+        0.5
+    }
+
+    #[derive(ToSchema, Validate, Serialize, Deserialize)]
+    pub struct PayloadDeployment {
+        #[garde(skip)]
+        location_uuids: Vec<uuid::Uuid>,
+
+        #[garde(skip)]
+        allow_overallocation: bool,
+        #[serde(default = "default_suspension_penalty")]
+        #[garde(range(min = 0.0, max = 1.0))]
+        #[schema(minimum = 0.0, maximum = 1.0, default = 0.5)]
+        suspension_penalty: f64,
+        #[serde(default = "default_randomness")]
+        #[garde(range(min = 0.0, max = 1.0))]
+        #[schema(minimum = 0.0, maximum = 1.0, default = 0.5)]
+        randomness: f64,
+
+        #[garde(dive)]
+        allocations: Option<shared::models::egg_configuration::EggConfigAllocationsDeployment>,
+    }
+
+    #[derive(ToSchema, Validate, Deserialize)]
+    pub struct Payload {
+        #[garde(dive)]
+        #[schema(inline)]
+        deployment: PayloadDeployment,
+
+        #[garde(skip)]
+        owner_uuid: uuid::Uuid,
+        #[garde(skip)]
+        egg_uuid: uuid::Uuid,
+        #[garde(skip)]
+        backup_configuration_uuid: Option<uuid::Uuid>,
+
+        #[garde(skip)]
+        allocation_uuid: Option<uuid::Uuid>,
+        #[garde(skip)]
+        allocation_uuids: Option<Vec<uuid::Uuid>>,
+
+        #[garde(skip)]
+        start_on_completion: bool,
+        #[garde(skip)]
+        skip_installer: bool,
+
+        #[garde(length(max = 255))]
+        #[schema(max_length = 255)]
+        external_id: Option<compact_str::CompactString>,
+        #[garde(length(chars, min = 3, max = 255))]
+        #[schema(min_length = 3, max_length = 255)]
+        name: compact_str::CompactString,
+        #[garde(length(max = 1024))]
+        #[schema(max_length = 1024)]
+        description: Option<compact_str::CompactString>,
+
+        #[garde(dive)]
+        limits: shared::models::server::AdminApiServerLimits,
+        #[garde(inner(range(min = 0)))]
+        pinned_cpus: Vec<i16>,
+
+        #[garde(length(chars, min = 1, max = 8192))]
+        #[schema(min_length = 1, max_length = 8192)]
+        startup: compact_str::CompactString,
+        #[garde(length(chars, min = 2, max = 255))]
+        #[schema(min_length = 2, max_length = 255)]
+        image: compact_str::CompactString,
+        #[garde(skip)]
+        #[schema(value_type = Option<String>)]
+        timezone: Option<chrono_tz::Tz>,
+
+        #[garde(skip)]
+        hugepages_passthrough_enabled: bool,
+        #[garde(skip)]
+        kvm_passthrough_enabled: bool,
+
+        #[garde(dive)]
+        feature_limits: shared::models::server::ApiServerFeatureLimits,
+        #[schema(inline)]
+        #[garde(dive)]
+        variables: Vec<PayloadVariable>,
+    }
+
+    #[derive(ToSchema, Serialize)]
+    struct Response {
+        server: shared::models::server::AdminApiServer,
+    }
+
+    #[utoipa::path(post, path = "/", responses(
+        (status = OK, body = inline(Response)),
+        (status = BAD_REQUEST, body = ApiError),
+        (status = NOT_FOUND, body = ApiError),
+        (status = CONFLICT, body = ApiError),
+    ), request_body = inline(Payload))]
+    pub async fn route(
+        state: GetState,
+        permissions: GetPermissionManager,
+        activity_logger: GetAdminActivityLogger,
+        shared::Payload(data): shared::Payload<Payload>,
+    ) -> ApiResponseResult {
+        if let Err(errors) = shared::utils::validate_data(&data) {
+            return ApiResponse::new_serialized(ApiError::new_strings_value(errors))
+                .with_status(StatusCode::BAD_REQUEST)
+                .ok();
+        }
+
+        permissions.has_admin_permission("servers.create")?;
+
+        let variables = NestEggVariable::all_by_egg_uuid(&state.database, data.egg_uuid).await?;
+
+        let mut validator_variables = HashMap::new();
+        validator_variables.reserve(variables.len());
+
+        for variable in variables.iter() {
+            validator_variables.insert(
+                variable.env_variable.as_str(),
+                (
+                    variable.rules.as_slice(),
+                    if let Some(value) = data
+                        .variables
+                        .iter()
+                        .find(|v| v.env_variable == variable.env_variable)
+                    {
+                        value.value.as_str()
+                    } else {
+                        variable.default_value.as_ref().map_or("", |v| v.as_str())
+                    },
+                ),
+            );
+        }
+
+        let validator = match rule_validator::Validator::new(validator_variables) {
+            Ok(validator) => validator,
+            Err(error) => {
+                return ApiResponse::error(&error)
+                    .with_status(StatusCode::BAD_REQUEST)
+                    .ok();
+            }
+        };
+
+        if let Err(error) = validator.validate() {
+            return ApiResponse::error(&error)
+                .with_status(StatusCode::BAD_REQUEST)
+                .ok();
+        }
+
+        let nodes = Node::by_location_uuids_most_eligible(
+            &state.database,
+            &data.deployment.location_uuids,
+            data.limits,
+            data.deployment.allow_overallocation,
+            data.deployment.suspension_penalty,
+            data.deployment.randomness,
+        )
+        .await?;
+
+        let mut allocation_configuration = None;
+        if let Some(allocations) = data.deployment.allocations {
+            allocation_configuration = Some(allocations);
+        } else {
+            let egg_configuration =
+                shared::models::egg_configuration::EggConfiguration::merged_by_egg_uuid(
+                    &state.database,
+                    data.egg_uuid,
+                )
+                .await?;
+
+            if let Some(allocations) = egg_configuration.config_allocations {
+                allocation_configuration = Some(allocations.deployment);
+            }
+        }
+
+        let mut deployment_variables = HashMap::new();
+
+        let mut allocation_uuid = data.allocation_uuid;
+        let mut allocation_uuids = data.allocation_uuids;
+        let mut allocation_error: Option<String> = None;
+
+        let mut node_uuid = None;
+        if (allocation_uuid.is_none() || allocation_uuids.is_none())
+            && let Some(allocations) = &allocation_configuration
+        {
+            for node in nodes {
+                let (deployment_allocation_uuid, deployment_allocation_uuids) =
+                    match NodeAllocation::get_from_deployment(
+                        &state,
+                        allocations,
+                        &node,
+                        &mut deployment_variables,
+                    )
+                    .await
+                    {
+                        Ok(result) => result,
+                        Err(shared::database::DatabaseError::Any(err)) => {
+                            allocation_error = Some(err.to_string());
+                            continue;
+                        }
+                        Err(err) => return ApiResponse::from(err).ok(),
+                    };
+
+                if deployment_allocation_uuids.len() != allocations.additional.len() {
+                    allocation_error = Some(format!(
+                        "a node could only satisfy {} of the {} required additional allocations",
+                        deployment_allocation_uuids.len(),
+                        allocations.additional.len()
+                    ));
+                    continue;
+                }
+
+                if allocation_uuid.is_none() {
+                    allocation_uuid = deployment_allocation_uuid;
+                }
+                if allocation_uuids.is_none() {
+                    allocation_uuids = Some(deployment_allocation_uuids);
+                }
+
+                node_uuid = Some(node.uuid);
+                break;
+            }
+        } else {
+            node_uuid = nodes.into_iter().next().map(|n| n.uuid);
+        }
+
+        let Some(node_uuid) = node_uuid else {
+            let reason = match Node::find_deployment_blocker(
+                &state.database,
+                &data.deployment.location_uuids,
+                data.limits,
+                data.deployment.allow_overallocation,
+                data.deployment.suspension_penalty,
+            )
+            .await?
+            {
+                Some(blocker) => blocker.message().to_string(),
+                None => allocation_error
+                    .unwrap_or_else(|| "no eligible node found for server deployment".to_string()),
+            };
+
+            return ApiResponse::error(format!("could not deploy server: {reason}"))
+                .with_status(StatusCode::BAD_REQUEST)
+                .ok();
+        };
+
+        let mut server_variables = HashMap::new();
+        server_variables.reserve(variables.len());
+
+        for data_variable in &data.variables {
+            let variable_uuid = match variables
+                .iter()
+                .find(|v| v.env_variable == data_variable.env_variable)
+            {
+                Some(variable) => variable.uuid,
+                None => continue,
+            };
+
+            server_variables.insert(variable_uuid, data_variable.value.clone().into());
+        }
+
+        for (deployment_variable, deployment_value) in deployment_variables {
+            let variable_uuid = match variables
+                .iter()
+                .find(|v| v.env_variable == deployment_variable)
+                .map(|v| v.uuid)
+            {
+                Some(uuid) => uuid,
+                None => continue,
+            };
+
+            server_variables.insert(variable_uuid, deployment_value);
+        }
+
+        let allocation_uuids = allocation_uuids.unwrap_or_default();
+
+        let options = shared::models::server::CreateServerOptions {
+            node_uuid,
+            owner_uuid: data.owner_uuid,
+            egg_uuid: data.egg_uuid,
+            backup_configuration_uuid: data.backup_configuration_uuid,
+            allocation_uuid,
+            allocation_uuids: allocation_uuids.clone(),
+            start_on_completion: data.start_on_completion,
+            skip_installer: data.skip_installer,
+            external_id: data.external_id,
+            name: data.name,
+            description: data.description,
+            limits: data.limits,
+            pinned_cpus: data.pinned_cpus,
+            startup: data.startup,
+            image: data.image,
+            timezone: data.timezone,
+            hugepages_passthrough_enabled: data.hugepages_passthrough_enabled,
+            kvm_passthrough_enabled: data.kvm_passthrough_enabled,
+            feature_limits: data.feature_limits.clone(),
+            variables: server_variables,
+        };
+        let server = match Server::create(&state, options).await {
+            Ok(server) => server,
+            Err(err) if err.is_unique_violation() => {
+                return ApiResponse::error(
+                    "server with allocation(s) or external id already exists",
+                )
+                .with_status(StatusCode::CONFLICT)
+                .ok();
+            }
+            Err(err) => return ApiResponse::from(err).ok(),
+        };
+
+        activity_logger
+            .log(
+                "server:create",
+                serde_json::json!({
+                    "uuid": server.uuid,
+                    "node_uuid": node_uuid,
+                    "owner_uuid": server.owner.uuid,
+                    "egg_uuid": server.egg.uuid,
+
+                    "allocation_uuid": allocation_uuid,
+                    "allocation_uuids": allocation_uuids,
+                    "external_id": server.external_id,
+
+                    "start_on_completion": data.start_on_completion,
+                    "skip_installer": data.skip_installer,
+
+                    "name": server.name,
+                    "description": server.description,
+                    "limits": data.limits,
+                    "pinned_cpus": server.pinned_cpus,
+                    "startup": server.startup,
+                    "image": server.image,
+                    "timezone": server.timezone,
+
+                    "hugepages_passthrough_enabled": server.hugepages_passthrough_enabled,
+                    "kvm_passthrough_enabled": server.kvm_passthrough_enabled,
+
+                    "feature_limits": data.feature_limits,
+                    "variables": data.variables,
+                }),
+            )
+            .await;
+
+        ApiResponse::new_serialized(Response {
+            server: server
+                .into_admin_api_object(&state, &state.storage.retrieve_urls().await?)
+                .await?,
+        })
+        .ok()
+    }
+}
+
+pub fn router(state: &State) -> OpenApiRouter<State> {
+    OpenApiRouter::new()
+        .routes(routes!(post::route))
+        .with_state(state.clone())
+}

@@ -1,0 +1,166 @@
+import { CSSVariablesResolver, MantineProvider, type MantineThemeOverride } from '@mantine/core';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
+import { createBrowserHistory } from 'history';
+import { useEffect, useRef, useState } from 'react';
+import { unstable_HistoryRouter as HistoryRouter } from 'react-router';
+import { useShallow } from 'zustand/react/shallow';
+import getAnnouncements from './api/getAnnouncements.ts';
+import getLanguages from './api/getLanguages.ts';
+import getSettings from './api/getSettings.ts';
+import ErrorBoundary from './elements/ErrorBoundary.tsx';
+import Spinner from './elements/Spinner.tsx';
+import { CurrentWindowProvider } from './providers/CurrentWindowProvider.tsx';
+import { HistoryContext } from './providers/contexts/historyContext.ts';
+import { ToastProvider } from './providers/ToastProvider.tsx';
+import TranslationProvider from './providers/TranslationProvider.tsx';
+import { WindowProvider } from './providers/WindowProvider.tsx';
+import RouterRoutes from './RouterRoutes.tsx';
+import { useGlobalStore } from './stores/global.ts';
+
+import '@mantine/core/styles.css';
+import '@mantine/charts/styles.css';
+import '@mantine/dates/styles.css';
+import '@mantine/schedule/styles.css';
+import '@gfazioli/mantine-window/styles.css';
+import '@gfazioli/mantine-audio/styles.css';
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false,
+      retry: 1,
+    },
+  },
+});
+
+const browserHistory = createBrowserHistory();
+
+const MAX_RETRIES = 10;
+
+export default function App({
+  theme,
+  cssVariablesResolver,
+}: {
+  theme: MantineThemeOverride;
+  cssVariablesResolver: CSSVariablesResolver | null;
+}) {
+  const { settings, setSettings, setLanguages, setTimeOffset, setAnnouncements } = useGlobalStore(
+    useShallow((state) => ({
+      settings: state.settings,
+      setSettings: state.setSettings,
+      setLanguages: state.setLanguages,
+      setTimeOffset: state.setTimeOffset,
+      setAnnouncements: state.setAnnouncements,
+    })),
+  );
+  const [loadWarning, setLoadWarning] = useState(false);
+  const retryCount = useRef(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+
+    const loadData = () => {
+      const loadSettings =
+        Object.keys(useGlobalStore.getState().settings).length > 0 ? Promise.resolve(null) : getSettings();
+
+      Promise.all([loadSettings, getLanguages()])
+        .then(([settings, languages]) => {
+          if (cancelled) return;
+
+          if (settings) {
+            setSettings(settings);
+            setTimeOffset(Date.now() - new Date(settings.time).getTime());
+          }
+          setLanguages(languages);
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          retryCount.current++;
+          console.error(`Failed to load app data (attempt ${retryCount.current}):`, err);
+
+          if (retryCount.current >= 2) {
+            setLoadWarning(true);
+          }
+
+          if (retryCount.current < MAX_RETRIES) {
+            timer = setTimeout(loadData, Math.min(retryCount.current * 2000, 10000));
+          }
+        });
+
+      getAnnouncements()
+        .then((announcements) => {
+          setAnnouncements(announcements);
+        })
+        .catch((err) => {
+          console.error('Failed to load announcements:', err);
+        });
+    };
+
+    loadData();
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (settings?.app?.icon) {
+      const icons = document.getElementsByClassName('app-icon');
+
+      for (const icon of icons) {
+        (icon as HTMLLinkElement).href = settings.app.icon;
+      }
+    }
+  }, [settings?.app?.icon]);
+
+  return Object.keys(settings).length > 0 ? (
+    <ErrorBoundary>
+      <MantineProvider
+        theme={theme}
+        cssVariablesResolver={cssVariablesResolver || undefined}
+        defaultColorScheme='dark'
+        deduplicateInlineStyles
+      >
+        <QueryClientProvider client={queryClient}>
+          <TranslationProvider>
+            <ToastProvider>
+              <WindowProvider>
+                <CurrentWindowProvider id={null}>
+                  <HistoryContext.Provider value={browserHistory}>
+                    <HistoryRouter history={browserHistory as never}>
+                      {window.extensionContext.extensionRegistry.global.prependedComponents.map((Component, index) => (
+                        <Component key={`global-prepended-${index}`} />
+                      ))}
+
+                      <RouterRoutes isNormal />
+
+                      {window.extensionContext.extensionRegistry.global.appendedComponents.map((Component, index) => (
+                        <Component key={`global-appended-${index}`} />
+                      ))}
+                    </HistoryRouter>
+                  </HistoryContext.Provider>
+
+                  <ReactQueryDevtools initialIsOpen={false} theme='dark' />
+                </CurrentWindowProvider>
+              </WindowProvider>
+            </ToastProvider>
+          </TranslationProvider>
+        </QueryClientProvider>
+      </MantineProvider>
+    </ErrorBoundary>
+  ) : (
+    <>
+      <MantineProvider theme={theme} defaultColorScheme='dark' deduplicateInlineStyles>
+        <Spinner.Centered />
+        {loadWarning && (
+          <p className='text-center text-sm text-slate-400 -mt-4'>
+            Having trouble connecting to the server. Retrying...
+          </p>
+        )}
+      </MantineProvider>
+    </>
+  );
+}

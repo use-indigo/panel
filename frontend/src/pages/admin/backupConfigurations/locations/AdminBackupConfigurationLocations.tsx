@@ -1,0 +1,52 @@
+import { z } from 'zod';
+import getBackupConfigurationLocations from '@/api/admin/backup-configurations/locations/getBackupConfigurationLocations.ts';
+import AdminSubContentContainer from '@/elements/containers/AdminSubContentContainer.tsx';
+import Table from '@/elements/Table.tsx';
+import { queryKeys } from '@/lib/queryKeys.ts';
+import { adminBackupConfigurationSchema } from '@/lib/schemas/admin/backupConfigurations.ts';
+import { locationTableColumns } from '@/lib/tableColumns.ts';
+import LocationRow from '@/pages/admin/locations/LocationRow.tsx';
+import { useSearchablePaginatedTable } from '@/plugins/useSearchablePaginatedTable.ts';
+import { useTranslations } from '@/providers/TranslationProvider.tsx';
+
+export default function AdminBackupConfigurationLocations({
+  backupConfiguration,
+}: {
+  backupConfiguration: z.infer<typeof adminBackupConfigurationSchema>;
+}) {
+  const { t } = useTranslations();
+  const {
+    data: backupConfigurationLocations,
+    loading,
+    error,
+    search,
+    setSearch,
+    setPage,
+  } = useSearchablePaginatedTable({
+    queryKey: queryKeys.admin.backupConfigurations.locations(backupConfiguration.uuid),
+    fetcher: (page, search) => getBackupConfigurationLocations(backupConfiguration.uuid, page, search),
+  });
+
+  return (
+    <AdminSubContentContainer
+      title={t('pages.admin.backupConfigurations.tabs.locations.page.title', {})}
+      titleOrder={2}
+      search={search}
+      setSearch={setSearch}
+      registry={window.extensionContext.extensionRegistry.pages.admin.backupConfigurations.view.locations.subContainer}
+      registryProps={{ backupConfiguration }}
+    >
+      <Table
+        columns={locationTableColumns()}
+        loading={loading}
+        error={error}
+        pagination={backupConfigurationLocations}
+        onPageSelect={setPage}
+      >
+        {backupConfigurationLocations?.data.map((location) => (
+          <LocationRow key={location.uuid} location={location} />
+        ))}
+      </Table>
+    </AdminSubContentContainer>
+  );
+}

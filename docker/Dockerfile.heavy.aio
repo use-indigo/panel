@@ -1,0 +1,75 @@
+ARG WINGS_SOURCE=release
+
+FROM node:24-slim AS node_source
+
+FROM ghcr.io/calagopus/wings:latest AS wings-release-image
+FROM alpine AS wings-release
+COPY --from=wings-release-image /usr/bin/calagopus-wings /wings/calagopus-wings
+
+FROM ghcr.io/calagopus/wings:nightly AS wings-nightly-image
+FROM alpine AS wings-nightly
+COPY --from=wings-nightly-image /usr/bin/calagopus-wings /wings/calagopus-wings
+
+FROM wings-${WINGS_SOURCE} AS wings
+
+# ---
+FROM rust:slim AS planner
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*
+RUN cargo install cargo-chef
+COPY . /app/repo
+WORKDIR /app/repo
+RUN cargo chef prepare --recipe-path recipe.json
+
+# ---
+FROM ghcr.io/calagopus/kopia:latest AS kopia
+FROM rust:slim AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates coreutils curl btrfs-progs xfsprogs restic && \
+	update-ca-certificates
+RUN apt-get install -y --no-install-recommends \
+    git \
+    perl \
+    build-essential \
+    mold \
+    clang \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=kopia /usr/local/bin/kopia /usr/bin/kopia
+
+COPY --from=node_source /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=node_source /usr/local/bin/node /usr/local/bin/node
+RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+RUN npm install -g npm@latest pnpm@11
+
+RUN cargo install cargo-chef
+
+WORKDIR /app/repo
+
+COPY --from=planner /app/repo/recipe.json recipe.json
+RUN mkdir -p .cargo && \
+    printf '[target."x86_64-unknown-linux-gnu"]\nlinker = "clang"\nrustflags = ["-C", "link-arg=-fuse-ld=mold"]\n\n[target."aarch64-unknown-linux-gnu"]\nlinker = "clang"\nrustflags = ["-C", "link-arg=-fuse-ld=mold"]\n' > .cargo/config.toml
+RUN cargo chef cook --profile heavy-release --recipe-path recipe.json -p panel-rs-aio -p heavy-supervisor
+
+COPY . /app/repo
+RUN cd frontend && pnpm install --frozen-lockfile && pnpm build:ci
+ARG WINGS_SOURCE
+RUN --mount=from=wings,source=/wings,target=/wings \
+    if [ -s /wings/calagopus-wings ]; then \
+        export WINGS_BINARY_PATH=/wings/calagopus-wings WINGS_RELEASE=${WINGS_SOURCE}; \
+    fi && \
+    cargo build --profile heavy-release -p panel-rs-aio -p heavy-supervisor
+
+RUN cp /app/repo/target/heavy-release/panel-rs-aio /app/panel-rs-aio.stock
+RUN cp /app/repo/target/heavy-release/heavy-supervisor /app/heavy-supervisor
+
+RUN ln -s /app/repo/target/heavy-release/panel-rs-aio /usr/local/bin/panel-rs
+RUN ln -s /app/repo/target/heavy-release/panel-rs-aio /usr/local/bin/calagopus-panel
+
+ENV OCI_CONTAINER=official-heavy-aio
+ENV CARGO_BUILD_PROFILE=balanced
+ENV PANEL_BIN_NAME=panel-rs-aio
+
+RUN touch /wings-config.yml
+
+ENTRYPOINT ["/app/heavy-supervisor"]

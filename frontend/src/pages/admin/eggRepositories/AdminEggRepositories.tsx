@@ -1,0 +1,77 @@
+import { faPlus } from '@fortawesome/free-solid-svg-icons';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { Route, Routes, useNavigate } from 'react-router';
+import getEggRepositories from '@/api/admin/egg-repositories/getEggRepositories.ts';
+import Button from '@/elements/Button.tsx';
+import { AdminCan } from '@/elements/Can.tsx';
+import AdminContentContainer from '@/elements/containers/AdminContentContainer.tsx';
+import Table from '@/elements/Table.tsx';
+import { queryKeys } from '@/lib/queryKeys.ts';
+import { eggRepositoryTableColumns } from '@/lib/tableColumns.ts';
+import { useSearchablePaginatedTable } from '@/plugins/useSearchablePaginatedTable.ts';
+import { useTranslations } from '@/providers/TranslationProvider.tsx';
+import AdminPermissionGuard from '@/routers/guards/AdminPermissionGuard.tsx';
+import EggRepositoryCreateOrUpdate from './EggRepositoryCreateOrUpdate.tsx';
+import EggRepositoryRow from './EggRepositoryRow.tsx';
+import EggRepositoryView from './EggRepositoryView.tsx';
+
+function EggRepositoriesContainer() {
+  const { t } = useTranslations();
+  const navigate = useNavigate();
+
+  const {
+    data: eggRepositories,
+    loading,
+    error,
+    search,
+    setSearch,
+    setPage,
+  } = useSearchablePaginatedTable({
+    queryKey: queryKeys.admin.eggRepositories.all(),
+    fetcher: getEggRepositories,
+  });
+
+  return (
+    <AdminContentContainer
+      title={t('pages.admin.eggRepositories.title', {})}
+      registry={window.extensionContext.extensionRegistry.pages.admin.eggRepositories.container}
+      search={search}
+      setSearch={setSearch}
+      contentRight={
+        <AdminCan action='egg-repositories.create'>
+          <Button
+            onClick={() => navigate('/admin/egg-repositories/new')}
+            color='blue'
+            leftSection={<FontAwesomeIcon icon={faPlus} />}
+          >
+            {t('common.button.create', {})}
+          </Button>
+        </AdminCan>
+      }
+    >
+      <Table
+        columns={eggRepositoryTableColumns()}
+        loading={loading}
+        error={error}
+        pagination={eggRepositories}
+        onPageSelect={setPage}
+      >
+        {eggRepositories?.data.map((eggRepository) => (
+          <EggRepositoryRow key={eggRepository.uuid} eggRepository={eggRepository} />
+        ))}
+      </Table>
+    </AdminContentContainer>
+  );
+}
+
+export default function AdminEggRepositories() {
+  return (
+    <Routes>
+      <Route path='/' element={<EggRepositoriesContainer />} />
+      <Route path='/:eggRepositoryId/*' element={<EggRepositoryView />} />
+      <Route element={<AdminPermissionGuard permission='egg-repositories.create' />}>
+        <Route path='/new' element={<EggRepositoryCreateOrUpdate />} />
+      </Route>
+    </Routes>
+  );
+}

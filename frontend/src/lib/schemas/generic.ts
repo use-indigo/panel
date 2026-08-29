@@ -1,0 +1,91 @@
+import { z } from 'zod';
+
+export const databaseType = z.enum(['mysql', 'postgres', 'mongodb']);
+
+export const databaseAgentType = z.enum(['postgres', 'mariadb', 'mongodb', 'redis']);
+
+export const databaseHostSchema = z.looseObject({
+  uuid: z.string(),
+  name: z.string(),
+  host: z.string(),
+  port: z.number(),
+  type: databaseType,
+  maintenanceEnabled: z.boolean(),
+});
+
+export const oAuthProviderSchema = z.looseObject({
+  uuid: z.string(),
+  name: z.string(),
+  linkViewable: z.boolean(),
+  userManageable: z.boolean(),
+});
+
+export const permissionMapSchema = z.record(
+  z.string(),
+  z.object({
+    description: z.string(),
+    permissions: z.record(z.string(), z.string()),
+  }),
+);
+
+export const apiPermissionsSchema = z.object({
+  userPermissions: permissionMapSchema,
+  serverPermissions: permissionMapSchema,
+  adminPermissions: permissionMapSchema,
+});
+
+export const serverSelectorSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('uuids'), uuids: z.array(z.string()) }),
+  z.object({ type: z.literal('all') }),
+]);
+
+export const eggConfigurationRouteItemSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('route'), path: z.string() }),
+  z.object({
+    type: z.literal('divider'),
+    name: z.string().nullable(),
+    nameTranslations: z.record(z.string(), z.string()),
+  }),
+  z.object({
+    type: z.literal('redirect'),
+    name: z.string(),
+    nameTranslations: z.record(z.string(), z.string()),
+    destination: z.string(),
+  }),
+]);
+
+export const transferArchiveFormat = z.enum([
+  'tar',
+  'tar_gz',
+  'tar_xz',
+  'tar_lzip',
+  'tar_bz2',
+  'tar_lz4',
+  'tar_zstd',
+  'itaf',
+  'itaf_gz',
+  'itaf_xz',
+  'itaf_lzip',
+  'itaf_bz2',
+  'itaf_lz4',
+  'itaf_zstd',
+]);
+
+export const streamingArchiveFormat = z.enum([
+  'tar',
+  'tar_gz',
+  'tar_xz',
+  'tar_lzip',
+  'tar_bz2',
+  'tar_lz4',
+  'tar_zstd',
+  'zip',
+]);
+
+export const compressionType = z.enum(['none', 'gz', 'xz', 'lzip', 'bz2', 'lz4', 'zstd']);
+
+export const hostnameSchema = z.union([
+  z.ipv4().min(1).max(255),
+  z.ipv6().min(1).max(255),
+  z.hostname().min(1).max(255),
+]);

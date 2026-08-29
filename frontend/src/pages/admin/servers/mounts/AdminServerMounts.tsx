@@ -1,0 +1,62 @@
+import { faPlus } from '@fortawesome/free-solid-svg-icons';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { useState } from 'react';
+import { z } from 'zod';
+import getServerMounts from '@/api/admin/servers/mounts/getServerMounts.ts';
+import Button from '@/elements/Button.tsx';
+import AdminSubContentContainer from '@/elements/containers/AdminSubContentContainer.tsx';
+import Table from '@/elements/Table.tsx';
+import { queryKeys } from '@/lib/queryKeys.ts';
+import { adminServerSchema } from '@/lib/schemas/admin/servers.ts';
+import { serverMountTableColumns } from '@/lib/tableColumns.ts';
+import ServerMountAddModal from '@/pages/admin/servers/mounts/modals/ServerMountAddModal.tsx';
+import ServerMountRow from '@/pages/admin/servers/mounts/ServerMountRow.tsx';
+import { useSearchablePaginatedTable } from '@/plugins/useSearchablePaginatedTable.ts';
+import { useTranslations } from '@/providers/TranslationProvider.tsx';
+
+export default function AdminServerMounts({ server }: { server: z.infer<typeof adminServerSchema> }) {
+  const { t } = useTranslations();
+  const [openModal, setOpenModal] = useState<'add' | null>(null);
+
+  const {
+    data: serverMounts,
+    loading,
+    error,
+    search,
+    setSearch,
+    setPage,
+  } = useSearchablePaginatedTable({
+    queryKey: queryKeys.admin.mountAssignments.mountsByServer(server.uuid),
+    fetcher: (page, search) => getServerMounts(server.uuid, page, search),
+  });
+
+  return (
+    <AdminSubContentContainer
+      title={t('pages.admin.servers.tabs.mounts.page.title', {})}
+      titleOrder={2}
+      search={search}
+      setSearch={setSearch}
+      contentRight={
+        <Button onClick={() => setOpenModal('add')} color='blue' leftSection={<FontAwesomeIcon icon={faPlus} />}>
+          {t('common.button.add', {})}
+        </Button>
+      }
+      registry={window.extensionContext.extensionRegistry.pages.admin.servers.view.mounts.subContainer}
+      registryProps={{ server }}
+    >
+      <ServerMountAddModal server={server} opened={openModal === 'add'} onClose={() => setOpenModal(null)} />
+
+      <Table
+        columns={serverMountTableColumns()}
+        loading={loading}
+        pagination={serverMounts}
+        onPageSelect={setPage}
+        error={error}
+      >
+        {serverMounts?.data.map((mount) => (
+          <ServerMountRow key={mount.mount.uuid} server={server} mount={mount} />
+        ))}
+      </Table>
+    </AdminSubContentContainer>
+  );
+}

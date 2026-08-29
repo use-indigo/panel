@@ -1,0 +1,48 @@
+import { z } from 'zod';
+import getLocationNodes from '@/api/admin/locations/nodes/getLocationNodes.ts';
+import AdminSubContentContainer from '@/elements/containers/AdminSubContentContainer.tsx';
+import Table from '@/elements/Table.tsx';
+import { queryKeys } from '@/lib/queryKeys.ts';
+import { adminLocationSchema } from '@/lib/schemas/admin/locations.ts';
+import { nodeTableColumns } from '@/lib/tableColumns.ts';
+import { useSearchablePaginatedTable } from '@/plugins/useSearchablePaginatedTable.ts';
+import { useTranslations } from '@/providers/TranslationProvider.tsx';
+import NodeRow from '../../nodes/NodeRow.tsx';
+
+export default function AdminLocationNodes({ location }: { location: z.infer<typeof adminLocationSchema> }) {
+  const { t } = useTranslations();
+  const {
+    data: locationNodes,
+    loading,
+    error,
+    search,
+    setSearch,
+    setPage,
+  } = useSearchablePaginatedTable({
+    queryKey: queryKeys.admin.locations.nodes(location.uuid),
+    fetcher: (page, search) => getLocationNodes(location.uuid, page, search),
+  });
+
+  return (
+    <AdminSubContentContainer
+      title={t('pages.admin.locations.tabs.nodes.page.title', {})}
+      titleOrder={2}
+      search={search}
+      setSearch={setSearch}
+      registry={window.extensionContext.extensionRegistry.pages.admin.locations.view.nodes.subContainer}
+      registryProps={{ location }}
+    >
+      <Table
+        columns={nodeTableColumns()}
+        loading={loading}
+        error={error}
+        pagination={locationNodes}
+        onPageSelect={setPage}
+      >
+        {locationNodes?.data.map((node) => (
+          <NodeRow key={node.uuid} node={node} />
+        ))}
+      </Table>
+    </AdminSubContentContainer>
+  );
+}

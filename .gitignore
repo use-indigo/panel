@@ -1,0 +1,8 @@
+target/
+backend-extensions/*/frontend/node_modules
+.env
+/logs/
+**/.idea
+exported-extensions/
+postgres/
+.docker/

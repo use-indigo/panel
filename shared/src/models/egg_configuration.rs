@@ -1,0 +1,830 @@
+use crate::{
+    models::{InsertQueryBuilder, UpdateQueryBuilder},
+    prelude::*,
+};
+use garde::Validate;
+use serde::{Deserialize, Serialize};
+use sqlx::{Row, postgres::PgRow};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, LazyLock},
+};
+use utoipa::ToSchema;
+
+pub fn validate_config_allocations(
+    config_allocations: &EggConfigAllocations,
+    _context: &(),
+) -> Result<(), garde::Error> {
+    if !config_allocations.user_self_assign.is_valid() {
+        return Err(garde::Error::new(
+            "port ranges must be 1-65535 and start_port < end_port",
+        ));
+    }
+
+    Ok(())
+}
+
+#[derive(ToSchema, Serialize, Deserialize, Clone, Copy)]
+pub struct EggConfigAllocationsUserSelfAssign {
+    pub enabled: bool,
+    pub require_primary_allocation: bool,
+
+    pub start_port: u16,
+    pub end_port: u16,
+}
+
+impl Default for EggConfigAllocationsUserSelfAssign {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            require_primary_allocation: true,
+            start_port: 49152,
+            end_port: 65535,
+        }
+    }
+}
+
+impl EggConfigAllocationsUserSelfAssign {
+    #[inline]
+    pub fn is_valid(&self) -> bool {
+        self.start_port < self.end_port && self.start_port >= 1
+    }
+}
+
+#[derive(ToSchema, Validate, Serialize, Deserialize, Clone)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum EggConfigAllocationDeploymentAdditionalAllocationMode {
+    Random,
+    Range {
+        #[garde(range(min = 1, max = 65535))]
+        start_port: u16,
+        #[garde(range(min = 1, max = 65535))]
+        end_port: u16,
+    },
+    AddPrimary {
+        #[garde(skip)]
+        value: u16,
+    },
+    SubtractPrimary {
+        #[garde(skip)]
+        value: u16,
+    },
+    MultiplyPrimary {
+        #[garde(skip)]
+        value: f64,
+    },
+    DividePrimary {
+        #[garde(skip)]
+        value: f64,
+    },
+}
+
+#[derive(ToSchema, Validate, Serialize, Deserialize, Clone)]
+pub struct EggConfigAllocationDeploymentAdditionalAllocation {
+    #[schema(inline)]
+    #[garde(dive)]
+    pub mode: EggConfigAllocationDeploymentAdditionalAllocationMode,
+    #[garde(length(chars, min = 1, max = 255))]
+    pub assign_to_variable: Option<compact_str::CompactString>,
+}
+
+#[derive(ToSchema, Validate, Serialize, Deserialize, Clone)]
+pub struct EggConfigAllocationDeploymentPrimaryAllocation {
+    #[garde(range(min = 1, max = 65535))]
+    pub start_port: u16,
+    #[garde(range(min = 1, max = 65535))]
+    pub end_port: u16,
+
+    #[garde(length(chars, min = 1, max = 255))]
+    pub assign_to_variable: Option<compact_str::CompactString>,
+}
+
+#[derive(ToSchema, Validate, Serialize, Deserialize, Default, Clone)]
+pub struct EggConfigAllocationsDeployment {
+    #[garde(skip)]
+    pub dedicated: bool,
+
+    #[schema(inline)]
+    #[garde(dive)]
+    pub primary: Option<EggConfigAllocationDeploymentPrimaryAllocation>,
+    #[schema(inline)]
+    #[garde(dive)]
+    pub additional: Vec<EggConfigAllocationDeploymentAdditionalAllocation>,
+}
+
+#[derive(ToSchema, Serialize, Deserialize, Default, Clone)]
+pub struct EggConfigAllocations {
+    #[serde(default)]
+    pub user_self_assign: EggConfigAllocationsUserSelfAssign,
+    #[serde(default)]
+    pub deployment: EggConfigAllocationsDeployment,
+}
+
+#[derive(ToSchema, Validate, Serialize, Deserialize, Default, Clone)]
+pub struct EggConfigStartup {
+    #[garde(skip)]
+    pub allow_custom_startup_command: bool,
+}
+
+#[derive(ToSchema, Validate, Serialize, Deserialize, Default, Clone)]
+pub struct EggConfigRoutes {
+    #[garde(length(max = 100))]
+    #[schema(max_length = 100)]
+    pub order: Vec<crate::settings::RouteOrderItem>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct EggConfiguration {
+    pub uuid: uuid::Uuid,
+
+    pub name: compact_str::CompactString,
+    pub description: Option<compact_str::CompactString>,
+    pub order: i16,
+
+    pub eggs: Vec<uuid::Uuid>,
+
+    pub config_allocations: Option<EggConfigAllocations>,
+    pub config_startup: Option<EggConfigStartup>,
+    pub config_routes: Option<EggConfigRoutes>,
+
+    pub created: chrono::NaiveDateTime,
+
+    extension_data: super::ModelExtensionData,
+}
+
+impl BaseModel for EggConfiguration {
+    const NAME: &'static str = "egg_configuration";
+
+    fn get_extension_list() -> &'static super::ModelExtensionList {
+        static EXTENSIONS: LazyLock<super::ModelExtensionList> =
+            LazyLock::new(|| parking_lot::RwLock::new(Vec::new()));
+
+        &EXTENSIONS
+    }
+
+    fn get_extension_data(&self) -> &super::ModelExtensionData {
+        &self.extension_data
+    }
+
+    #[inline]
+    fn base_columns(prefix: Option<&str>) -> BTreeMap<&'static str, compact_str::CompactString> {
+        let prefix = prefix.unwrap_or_default();
+
+        BTreeMap::from([
+            (
+                "egg_configurations.uuid",
+                compact_str::format_compact!("{prefix}uuid"),
+            ),
+            (
+                "egg_configurations.name",
+                compact_str::format_compact!("{prefix}name"),
+            ),
+            (
+                "egg_configurations.description",
+                compact_str::format_compact!("{prefix}description"),
+            ),
+            (
+                "egg_configurations.order_",
+                compact_str::format_compact!("{prefix}order_"),
+            ),
+            (
+                "egg_configurations.eggs",
+                compact_str::format_compact!("{prefix}eggs"),
+            ),
+            (
+                "egg_configurations.config_allocations",
+                compact_str::format_compact!("{prefix}config_allocations"),
+            ),
+            (
+                "egg_configurations.config_startup",
+                compact_str::format_compact!("{prefix}config_startup"),
+            ),
+            (
+                "egg_configurations.config_routes",
+                compact_str::format_compact!("{prefix}config_routes"),
+            ),
+            (
+                "egg_configurations.created",
+                compact_str::format_compact!("{prefix}created"),
+            ),
+        ])
+    }
+
+    #[inline]
+    fn map(prefix: Option<&str>, row: &PgRow) -> Result<Self, crate::database::DatabaseError> {
+        let prefix = prefix.unwrap_or_default();
+
+        Ok(Self {
+            uuid: row.try_get(compact_str::format_compact!("{prefix}uuid").as_str())?,
+            name: row.try_get(compact_str::format_compact!("{prefix}name").as_str())?,
+            description: row
+                .try_get(compact_str::format_compact!("{prefix}description").as_str())?,
+            order: row.try_get(compact_str::format_compact!("{prefix}order_").as_str())?,
+            eggs: row.try_get(compact_str::format_compact!("{prefix}eggs").as_str())?,
+            config_allocations: row
+                .try_get::<Option<serde_json::Value>, _>(
+                    compact_str::format_compact!("{prefix}config_allocations").as_str(),
+                )?
+                .and_then(|v| serde_json::from_value(v).ok()),
+            config_startup: row
+                .try_get::<Option<serde_json::Value>, _>(
+                    compact_str::format_compact!("{prefix}config_startup").as_str(),
+                )?
+                .and_then(|v| serde_json::from_value(v).ok()),
+            config_routes: row
+                .try_get::<Option<serde_json::Value>, _>(
+                    compact_str::format_compact!("{prefix}config_routes").as_str(),
+                )?
+                .and_then(|v| serde_json::from_value(v).ok()),
+            created: row.try_get(compact_str::format_compact!("{prefix}created").as_str())?,
+            extension_data: Self::map_extensions(prefix, row)?,
+        })
+    }
+}
+
+impl EggConfiguration {
+    pub async fn all_with_pagination(
+        database: &crate::database::Database,
+        page: i64,
+        per_page: i64,
+        search: Option<&str>,
+    ) -> Result<super::Pagination<Self>, crate::database::DatabaseError> {
+        let offset = (page - 1) * per_page;
+
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+            r#"
+            SELECT {}, COUNT(*) OVER() AS total_count
+            FROM egg_configurations
+            WHERE ($1 IS NULL OR egg_configurations.name ILIKE '%' || $1 || '%')
+            ORDER BY egg_configurations.order_, egg_configurations.created
+            LIMIT $2 OFFSET $3
+            "#,
+            Self::columns_sql(None)
+        )))
+        .bind(search)
+        .bind(per_page)
+        .bind(offset)
+        .fetch_all(database.read())
+        .await?;
+
+        Ok(super::Pagination {
+            total: rows
+                .first()
+                .map_or(Ok(0), |row| row.try_get("total_count"))?,
+            per_page,
+            page,
+            data: rows
+                .into_iter()
+                .map(|row| Self::map(None, &row))
+                .try_collect_vec()?,
+        })
+    }
+
+    pub async fn merged_by_egg_uuid(
+        database: &crate::database::Database,
+        egg_uuid: uuid::Uuid,
+    ) -> Result<MergedEggConfiguration, crate::database::DatabaseError> {
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+            r#"
+            SELECT {}
+            FROM egg_configurations
+            WHERE $1 = ANY(egg_configurations.eggs)
+            ORDER BY egg_configurations.order_, egg_configurations.created
+            "#,
+            Self::columns_sql(None)
+        )))
+        .bind(egg_uuid)
+        .fetch_all(database.read())
+        .await?;
+
+        let rows = rows
+            .into_iter()
+            .map(|row| Self::map(None, &row))
+            .try_collect_vec()?;
+
+        let mut base = MergedEggConfiguration {
+            config_allocations: None,
+            config_startup: None,
+            config_routes: None,
+        };
+
+        for row in rows {
+            if row.config_allocations.is_some() {
+                base.config_allocations = row.config_allocations;
+            }
+            if row.config_startup.is_some() {
+                base.config_startup = row.config_startup;
+            }
+            if row.config_routes.is_some() {
+                base.config_routes = row.config_routes;
+            }
+        }
+
+        Ok(base)
+    }
+
+    pub async fn cleanup_uuid_arrays(
+        database: &crate::database::Database,
+    ) -> Result<u64, crate::database::DatabaseError> {
+        let result = sqlx::query(
+            "UPDATE egg_configurations
+            SET eggs = COALESCE(
+                (SELECT array_agg(u) FROM unnest(eggs) AS u
+                WHERE EXISTS (SELECT 1 FROM nest_eggs WHERE uuid = u)),
+                '{}'::uuid[]
+            )
+            WHERE EXISTS (
+                SELECT 1 FROM unnest(eggs) AS u
+                WHERE NOT EXISTS (SELECT 1 FROM nest_eggs WHERE uuid = u)
+            )",
+        )
+        .execute(database.write())
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+}
+
+#[async_trait::async_trait]
+impl IntoAdminApiObject for EggConfiguration {
+    type AdminApiObject = AdminApiEggConfiguration;
+    type ExtraArgs<'a> = ();
+
+    async fn into_admin_api_object<'a>(
+        self,
+        state: &crate::State,
+        _args: Self::ExtraArgs<'a>,
+    ) -> Result<Self::AdminApiObject, crate::database::DatabaseError> {
+        let api_object = AdminApiEggConfiguration::init_hooks(&self, state).await?;
+
+        let api_object = finish_extendible!(
+            AdminApiEggConfiguration {
+                uuid: self.uuid,
+                name: self.name,
+                description: self.description,
+                order: self.order,
+                eggs: self.eggs,
+                config_allocations: self.config_allocations,
+                config_startup: self.config_startup,
+                config_routes: self.config_routes,
+                created: self.created.and_utc(),
+            },
+            api_object,
+            state
+        )?;
+
+        Ok(api_object)
+    }
+}
+
+#[async_trait::async_trait]
+impl ByUuid for EggConfiguration {
+    async fn by_uuid(
+        database: &crate::database::Database,
+        uuid: uuid::Uuid,
+    ) -> Result<Self, crate::database::DatabaseError> {
+        let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+            r#"
+            SELECT {}
+            FROM egg_configurations
+            WHERE egg_configurations.uuid = $1
+            "#,
+            Self::columns_sql(None)
+        )))
+        .bind(uuid)
+        .fetch_one(database.read())
+        .await?;
+
+        Self::map(None, &row)
+    }
+
+    async fn by_uuid_with_transaction(
+        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        uuid: uuid::Uuid,
+    ) -> Result<Self, crate::database::DatabaseError> {
+        let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+            r#"
+            SELECT {}
+            FROM egg_configurations
+            WHERE egg_configurations.uuid = $1
+            "#,
+            Self::columns_sql(None)
+        )))
+        .bind(uuid)
+        .fetch_one(&mut **transaction)
+        .await?;
+
+        Self::map(None, &row)
+    }
+}
+
+#[derive(ToSchema, Deserialize, Validate)]
+pub struct CreateEggConfigurationOptions {
+    #[garde(length(chars, min = 1, max = 255))]
+    #[schema(min_length = 1, max_length = 255)]
+    pub name: compact_str::CompactString,
+    #[garde(length(chars, min = 1, max = 1024))]
+    #[schema(min_length = 1, max_length = 1024)]
+    pub description: Option<compact_str::CompactString>,
+    #[garde(skip)]
+    pub order: i16,
+    #[garde(length(max = 100))]
+    #[schema(max_length = 100)]
+    pub eggs: Vec<uuid::Uuid>,
+    #[garde(inner(custom(validate_config_allocations)))]
+    #[schema(inline)]
+    pub config_allocations: Option<EggConfigAllocations>,
+    #[garde(dive)]
+    #[schema(inline)]
+    pub config_startup: Option<EggConfigStartup>,
+    #[garde(dive)]
+    #[schema(inline)]
+    pub config_routes: Option<EggConfigRoutes>,
+}
+
+#[async_trait::async_trait]
+impl CreatableModel for EggConfiguration {
+    type CreateOptions<'a> = CreateEggConfigurationOptions;
+    type CreateResult = Self;
+
+    fn get_create_handlers() -> &'static LazyLock<CreateListenerList<Self>> {
+        static CREATE_LISTENERS: LazyLock<CreateListenerList<EggConfiguration>> =
+            LazyLock::new(|| Arc::new(ModelHandlerList::default()));
+
+        &CREATE_LISTENERS
+    }
+
+    async fn create_with_transaction(
+        state: &crate::State,
+        mut options: Self::CreateOptions<'_>,
+        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<Self, crate::database::DatabaseError> {
+        options.validate()?;
+
+        let mut query_builder = InsertQueryBuilder::new("egg_configurations");
+
+        Self::run_create_handlers(&mut options, &mut query_builder, state, transaction).await?;
+
+        query_builder
+            .set("name", &options.name)
+            .set("description", &options.description)
+            .set("order_", options.order)
+            .set("eggs", &options.eggs)
+            .set(
+                "config_allocations",
+                options
+                    .config_allocations
+                    .as_ref()
+                    .map(serde_json::to_value)
+                    .transpose()?,
+            )
+            .set(
+                "config_startup",
+                options
+                    .config_startup
+                    .as_ref()
+                    .map(serde_json::to_value)
+                    .transpose()?,
+            )
+            .set(
+                "config_routes",
+                options
+                    .config_routes
+                    .as_ref()
+                    .map(serde_json::to_value)
+                    .transpose()?,
+            );
+
+        let row = query_builder
+            .returning(&Self::columns_sql(None))
+            .fetch_one(&mut **transaction)
+            .await?;
+        let mut egg_configuration = Self::map(None, &row)?;
+
+        Self::run_after_create_handlers(&mut egg_configuration, &options, state, transaction)
+            .await?;
+
+        Ok(egg_configuration)
+    }
+}
+
+#[derive(ToSchema, Serialize, Deserialize, Validate, Clone, Default)]
+pub struct UpdateEggConfigurationOptions {
+    #[garde(length(chars, min = 1, max = 255))]
+    #[schema(min_length = 1, max_length = 255)]
+    pub name: Option<compact_str::CompactString>,
+    #[garde(length(chars, min = 1, max = 1024))]
+    #[schema(min_length = 1, max_length = 1024)]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "::serde_with::rust::double_option"
+    )]
+    pub description: Option<Option<compact_str::CompactString>>,
+    #[garde(skip)]
+    pub order: Option<i16>,
+    #[garde(length(max = 100))]
+    #[schema(max_length = 100)]
+    pub eggs: Option<Vec<uuid::Uuid>>,
+
+    #[garde(inner(inner(custom(validate_config_allocations))))]
+    #[schema(inline)]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "::serde_with::rust::double_option"
+    )]
+    pub config_allocations: Option<Option<EggConfigAllocations>>,
+    #[garde(dive)]
+    #[schema(inline)]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "::serde_with::rust::double_option"
+    )]
+    pub config_startup: Option<Option<EggConfigStartup>>,
+    #[garde(dive)]
+    #[schema(inline)]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "::serde_with::rust::double_option"
+    )]
+    pub config_routes: Option<Option<EggConfigRoutes>>,
+}
+
+#[async_trait::async_trait]
+impl UpdatableModel for EggConfiguration {
+    type UpdateOptions = UpdateEggConfigurationOptions;
+
+    fn get_update_handlers() -> &'static LazyLock<UpdateHandlerList<Self>> {
+        static UPDATE_LISTENERS: LazyLock<UpdateHandlerList<EggConfiguration>> =
+            LazyLock::new(|| Arc::new(ModelHandlerList::default()));
+
+        &UPDATE_LISTENERS
+    }
+
+    async fn update_with_transaction(
+        &mut self,
+        state: &crate::State,
+        mut options: Self::UpdateOptions,
+        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), crate::database::DatabaseError> {
+        options.validate()?;
+
+        let mut query_builder = UpdateQueryBuilder::new("egg_configurations");
+
+        self.run_update_handlers(&mut options, &mut query_builder, state, transaction)
+            .await?;
+
+        query_builder
+            .set("name", options.name.as_ref())
+            .set(
+                "description",
+                options.description.as_ref().map(|d| d.as_ref()),
+            )
+            .set("order_", options.order)
+            .set("eggs", options.eggs.as_ref())
+            .set(
+                "config_allocations",
+                options
+                    .config_allocations
+                    .as_ref()
+                    .map(|c| c.as_ref().map(serde_json::to_value).transpose())
+                    .transpose()?,
+            )
+            .set(
+                "config_startup",
+                options
+                    .config_startup
+                    .as_ref()
+                    .map(|c| c.as_ref().map(serde_json::to_value).transpose())
+                    .transpose()?,
+            )
+            .set(
+                "config_routes",
+                options
+                    .config_routes
+                    .as_ref()
+                    .map(|c| c.as_ref().map(serde_json::to_value).transpose())
+                    .transpose()?,
+            )
+            .where_eq("uuid", self.uuid);
+
+        query_builder.execute(&mut **transaction).await?;
+
+        if let Some(name) = options.name {
+            self.name = name;
+        }
+        if let Some(description) = options.description {
+            self.description = description;
+        }
+        if let Some(order) = options.order {
+            self.order = order;
+        }
+        if let Some(eggs) = options.eggs {
+            self.eggs = eggs;
+        }
+        if let Some(config_allocations) = options.config_allocations {
+            self.config_allocations = config_allocations;
+        }
+        if let Some(config_startup) = options.config_startup {
+            self.config_startup = config_startup;
+        }
+        if let Some(config_routes) = options.config_routes {
+            self.config_routes = config_routes;
+        }
+
+        self.run_after_update_handlers(state, transaction).await?;
+
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl DeletableModel for EggConfiguration {
+    type DeleteOptions = ();
+
+    fn get_delete_handlers() -> &'static LazyLock<DeleteHandlerList<Self>> {
+        static DELETE_LISTENERS: LazyLock<DeleteHandlerList<EggConfiguration>> =
+            LazyLock::new(|| Arc::new(ModelHandlerList::default()));
+
+        &DELETE_LISTENERS
+    }
+
+    async fn delete_with_transaction(
+        &self,
+        state: &crate::State,
+        options: Self::DeleteOptions,
+        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), anyhow::Error> {
+        self.run_delete_handlers(&options, state, transaction)
+            .await?;
+
+        sqlx::query(
+            r#"
+            DELETE FROM egg_configurations
+            WHERE egg_configurations.uuid = $1
+            "#,
+        )
+        .bind(self.uuid)
+        .execute(&mut **transaction)
+        .await?;
+
+        self.run_after_delete_handlers(&options, state, transaction)
+            .await?;
+
+        Ok(())
+    }
+}
+
+#[derive(Validate)]
+pub struct DuplicateEggConfigurationOptions {
+    #[garde(length(chars, min = 1, max = 255))]
+    pub name: compact_str::CompactString,
+}
+
+#[async_trait::async_trait]
+impl DuplicableModel for EggConfiguration {
+    type DuplicateOptions<'a> = DuplicateEggConfigurationOptions;
+
+    fn get_duplicate_handlers() -> &'static LazyLock<DuplicateHandlerList<Self>> {
+        static DUPLICATE_LISTENERS: LazyLock<DuplicateHandlerList<EggConfiguration>> =
+            LazyLock::new(|| Arc::new(ModelHandlerList::default()));
+
+        &DUPLICATE_LISTENERS
+    }
+
+    async fn duplicate_with_transaction(
+        &self,
+        state: &crate::State,
+        options: Self::DuplicateOptions<'_>,
+        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<Self, crate::database::DatabaseError> {
+        options.validate()?;
+
+        self.run_duplicate_handlers(&options, state, transaction)
+            .await?;
+
+        let mut query_builder = InsertQueryBuilder::new("egg_configurations");
+
+        query_builder
+            .set("name", &options.name)
+            .set("description", &self.description)
+            .set("order_", self.order)
+            .set("eggs", &self.eggs)
+            .set(
+                "config_allocations",
+                self.config_allocations
+                    .as_ref()
+                    .map(serde_json::to_value)
+                    .transpose()?,
+            )
+            .set(
+                "config_startup",
+                self.config_startup
+                    .as_ref()
+                    .map(serde_json::to_value)
+                    .transpose()?,
+            )
+            .set(
+                "config_routes",
+                self.config_routes
+                    .as_ref()
+                    .map(serde_json::to_value)
+                    .transpose()?,
+            );
+
+        let row = query_builder
+            .returning(&Self::columns_sql(None))
+            .fetch_one(&mut **transaction)
+            .await?;
+        let mut egg_configuration = Self::map(None, &row)?;
+
+        self.run_after_duplicate_handlers(&mut egg_configuration, &options, state, transaction)
+            .await?;
+
+        Ok(egg_configuration)
+    }
+}
+
+#[schema_extension_derive::extendible]
+#[init_args(EggConfiguration, crate::State)]
+#[hook_args(crate::State)]
+#[derive(ToSchema, Serialize)]
+#[schema(title = "AdminEggConfiguration")]
+pub struct AdminApiEggConfiguration {
+    pub uuid: uuid::Uuid,
+
+    pub name: compact_str::CompactString,
+    pub description: Option<compact_str::CompactString>,
+    pub order: i16,
+
+    pub eggs: Vec<uuid::Uuid>,
+
+    #[schema(inline)]
+    pub config_allocations: Option<EggConfigAllocations>,
+    #[schema(inline)]
+    pub config_startup: Option<EggConfigStartup>,
+    #[schema(inline)]
+    pub config_routes: Option<EggConfigRoutes>,
+
+    pub created: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct MergedEggConfiguration {
+    pub config_allocations: Option<EggConfigAllocations>,
+    pub config_startup: Option<EggConfigStartup>,
+    pub config_routes: Option<EggConfigRoutes>,
+}
+
+impl MergedEggConfiguration {}
+
+#[async_trait::async_trait]
+impl IntoApiObject for MergedEggConfiguration {
+    type ApiObject = ApiEggConfiguration;
+    type ExtraArgs<'a> = ();
+
+    async fn into_api_object<'a>(
+        self,
+        state: &crate::State,
+        _args: Self::ExtraArgs<'a>,
+    ) -> Result<Self::ApiObject, crate::database::DatabaseError> {
+        let api_object = ApiEggConfiguration::init_hooks(&self, state).await?;
+
+        let api_object = finish_extendible!(
+            ApiEggConfiguration {
+                allocation_self_assign_enabled: self
+                    .config_allocations
+                    .as_ref()
+                    .is_some_and(|c| c.user_self_assign.enabled),
+                allocation_self_assign_require_primary: self
+                    .config_allocations
+                    .as_ref()
+                    .is_some_and(|c| c.user_self_assign.require_primary_allocation),
+                startup_allow_custom_command: self
+                    .config_startup
+                    .as_ref()
+                    .is_some_and(|c| c.allow_custom_startup_command),
+                route_order: self.config_routes.map(|c| c.order),
+            },
+            api_object,
+            state
+        )?;
+
+        Ok(api_object)
+    }
+}
+
+#[schema_extension_derive::extendible]
+#[init_args(MergedEggConfiguration, crate::State)]
+#[hook_args(crate::State)]
+#[derive(ToSchema, Serialize)]
+#[schema(title = "NestEggConfiguration")]
+pub struct ApiEggConfiguration {
+    pub allocation_self_assign_enabled: bool,
+    pub allocation_self_assign_require_primary: bool,
+    pub startup_allow_custom_command: bool,
+    pub route_order: Option<Vec<crate::settings::RouteOrderItem>>,
+}

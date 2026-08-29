@@ -1,0 +1,62 @@
+import { faPlus } from '@fortawesome/free-solid-svg-icons';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { useState } from 'react';
+import { z } from 'zod';
+import getNodeMounts from '@/api/admin/nodes/mounts/getNodeMounts.ts';
+import Button from '@/elements/Button.tsx';
+import AdminSubContentContainer from '@/elements/containers/AdminSubContentContainer.tsx';
+import Table from '@/elements/Table.tsx';
+import { queryKeys } from '@/lib/queryKeys.ts';
+import { adminNodeSchema } from '@/lib/schemas/admin/nodes.ts';
+import { nodeMountTableColumns } from '@/lib/tableColumns.ts';
+import { useSearchablePaginatedTable } from '@/plugins/useSearchablePaginatedTable.ts';
+import { useTranslations } from '@/providers/TranslationProvider.tsx';
+import NodeMountAddModal from './modals/NodeMountAddModal.tsx';
+import NodeMountRow from './NodeMountRow.tsx';
+
+export default function AdminNodeMounts({ node }: { node: z.infer<typeof adminNodeSchema> }) {
+  const { t } = useTranslations();
+  const [openModal, setOpenModal] = useState<'add' | null>(null);
+
+  const {
+    data: nodeMounts,
+    loading,
+    error,
+    search,
+    setSearch,
+    setPage,
+  } = useSearchablePaginatedTable({
+    queryKey: queryKeys.admin.mountAssignments.mountsByNode(node.uuid),
+    fetcher: (page, search) => getNodeMounts(node.uuid, page, search),
+  });
+
+  return (
+    <AdminSubContentContainer
+      title={t('pages.admin.nodes.tabs.mounts.page.title', {})}
+      titleOrder={2}
+      search={search}
+      setSearch={setSearch}
+      registry={window.extensionContext.extensionRegistry.pages.admin.nodes.view.mounts.subContainer}
+      registryProps={{ node }}
+      contentRight={
+        <Button onClick={() => setOpenModal('add')} color='blue' leftSection={<FontAwesomeIcon icon={faPlus} />}>
+          {t('common.button.add', {})}
+        </Button>
+      }
+    >
+      <NodeMountAddModal node={node} opened={openModal === 'add'} onClose={() => setOpenModal(null)} />
+
+      <Table
+        columns={nodeMountTableColumns()}
+        loading={loading}
+        error={error}
+        pagination={nodeMounts}
+        onPageSelect={setPage}
+      >
+        {nodeMounts?.data.map((mount) => (
+          <NodeMountRow key={mount.mount.uuid} node={node} mount={mount} />
+        ))}
+      </Table>
+    </AdminSubContentContainer>
+  );
+}

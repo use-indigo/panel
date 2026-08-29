@@ -1,0 +1,881 @@
+import { IconDefinition } from '@fortawesome/fontawesome-svg-core';
+import { faDocker } from '@fortawesome/free-brands-svg-icons';
+import {
+  faBoxArchive,
+  faBriefcase,
+  faBullhorn,
+  faChartPie,
+  faCheckCircle,
+  faCircleXmark,
+  faClockRotateLeft,
+  faCloud,
+  faCode,
+  faCodeBranch,
+  faCog,
+  faCogs,
+  faCompress,
+  faComputer,
+  faCopy,
+  faCubes,
+  faDatabase,
+  faDownload,
+  faEarthAmerica,
+  faEdit,
+  faEgg,
+  faEnvelope,
+  faEquals,
+  faExclamationTriangle,
+  faExpand,
+  faFile,
+  faFileZipper,
+  faFingerprint,
+  faFolder,
+  faFolderOpen,
+  faGear,
+  faGlobe,
+  faHourglass,
+  faInfoCircle,
+  faKey,
+  faKiwiBird,
+  faNetworkWired,
+  faPlay,
+  faPowerOff,
+  faPuzzlePiece,
+  faRightFromBracket,
+  faRightLeft,
+  faScroll,
+  faServer,
+  faShieldHalved,
+  faSkull,
+  faStopwatch,
+  faTerminal,
+  faTextSlash,
+  faTrash,
+  faUnlockKeyhole,
+  faUser,
+  faUserSecret,
+  faUsers,
+} from '@fortawesome/free-solid-svg-icons';
+import { z } from 'zod';
+import { adminBackupConfigurationSchema } from '@/lib/schemas/admin/backupConfigurations.ts';
+import { adminEggConfigurationDeploymentSchema } from '@/lib/schemas/admin/eggConfigurations.ts';
+import { processConfigurationConfigParser } from '@/lib/schemas/admin/eggs.ts';
+import { AdminOAuthProviderMappingMatcher } from '@/lib/schemas/admin/oauthProviders.ts';
+import { adminSettingsEmailSchema, adminSettingsStorageSchema } from '@/lib/schemas/admin/settings.ts';
+import {
+  compressionType,
+  databaseAgentType,
+  databaseType,
+  streamingArchiveFormat,
+  transferArchiveFormat,
+} from '@/lib/schemas/generic.ts';
+import { serverDatabaseInstanceUserPermission } from '@/lib/schemas/server/databaseInstances.ts';
+import { serverDatabaseFilterOperator } from '@/lib/schemas/server/databases.ts';
+import { archiveFormat, compressionLevel, fingerprintAlgorithm } from '@/lib/schemas/server/files.ts';
+import { serverFirewallRuleAction, serverFirewallRuleProtocol } from '@/lib/schemas/server/firewall.ts';
+import {
+  serverScheduleComparator,
+  serverScheduleConditionSchema,
+  serverScheduleResourceMetric,
+  serverScheduleStepActionSchema,
+  serverScheduleTriggerSchema,
+} from '@/lib/schemas/server/schedules.ts';
+import { serverBackupStatus, serverPowerAction, serverPowerState } from '@/lib/schemas/server/server.ts';
+import { publicSettingsCaptchaProviderSchema } from '@/lib/schemas/settings.ts';
+import { userSshKeyProvider } from '@/lib/schemas/user/sshKeys.ts';
+import { getTranslations } from '@/providers/TranslationProvider.tsx';
+import { adminDatabaseCredentialsSchema } from './schemas/admin/databaseHosts.ts';
+import { adminEggRepositoryCredentialsSchema } from './schemas/admin/eggRepositories.ts';
+import { announcementType } from './schemas/announcements.ts';
+
+export function mappingToSelectData<T extends string>(mapping: Record<T, () => string>): { value: T; label: string }[] {
+  return Object.entries(mapping).map(([value, label]) => ({
+    value: value as T,
+    label: (label as () => string)(),
+  }));
+}
+
+export const captchaProviderTypeLabelMapping: Record<
+  z.infer<typeof publicSettingsCaptchaProviderSchema>['type'],
+  string
+> = {
+  none: 'None',
+  turnstile: 'Turnstile',
+  recaptcha: 'reCAPTCHA',
+  hcaptcha: 'hCaptcha',
+  friendly_captcha: 'Friendly Captcha',
+};
+
+export const compressionLevelLabelMapping: Record<z.infer<typeof compressionLevel>, () => string> = {
+  best_speed: () => getTranslations().t('common.enum.compressionLevel.bestSpeed', {}),
+  good_speed: () => getTranslations().t('common.enum.compressionLevel.goodSpeed', {}),
+  good_compression: () => getTranslations().t('common.enum.compressionLevel.goodCompression', {}),
+  best_compression: () => getTranslations().t('common.enum.compressionLevel.bestCompression', {}),
+};
+
+export const processConfigurationParserLabelMapping: Record<
+  z.infer<typeof processConfigurationConfigParser>,
+  string
+> = {
+  file: 'File',
+  yaml: 'YAML',
+  properties: 'Properties',
+  ini: 'INI',
+  json: 'JSON',
+  xml: 'XML',
+  toml: 'TOML',
+};
+
+export const databaseTypeLabelMapping: Record<z.infer<typeof databaseType>, string> = {
+  mysql: 'MySQL',
+  postgres: 'PostgreSQL',
+  mongodb: 'MongoDB',
+};
+
+export const databaseAgentTypeLabelMapping: Record<z.infer<typeof databaseAgentType>, string> = {
+  postgres: 'PostgreSQL',
+  mariadb: 'MariaDB',
+  mongodb: 'MongoDB',
+  redis: 'Redis',
+};
+
+export const serverDatabaseInstanceUserPermissionLabelMapping: Record<
+  z.infer<typeof serverDatabaseInstanceUserPermission>,
+  () => string
+> = {
+  none: () => getTranslations().t('pages.server.databases.instance.users.enum.permission.none', {}),
+  read_only: () => getTranslations().t('pages.server.databases.instance.users.enum.permission.readOnly', {}),
+  read_write: () => getTranslations().t('pages.server.databases.instance.users.enum.permission.readWrite', {}),
+};
+
+export const databaseAgentTypeDefaultPortMapping: Record<z.infer<typeof databaseAgentType>, number> = {
+  postgres: 5432,
+  mariadb: 3306,
+  mongodb: 27017,
+  redis: 6379,
+};
+
+export const announcementTypeLabelMapping: Record<z.infer<typeof announcementType>, () => string> = {
+  info: () => getTranslations().t('pages.admin.announcements.enum.announcementType.info', {}),
+  success: () => getTranslations().t('pages.admin.announcements.enum.announcementType.success', {}),
+  warning: () => getTranslations().t('pages.admin.announcements.enum.announcementType.warning', {}),
+  error: () => getTranslations().t('pages.admin.announcements.enum.announcementType.error', {}),
+};
+
+export const announcementTypeColorMapping: Record<z.infer<typeof announcementType>, string> = {
+  info: 'blue',
+  success: 'green',
+  warning: 'yellow',
+  error: 'red',
+};
+
+export const announcementTypeIconMapping: Record<z.infer<typeof announcementType>, IconDefinition> = {
+  info: faInfoCircle,
+  success: faCheckCircle,
+  warning: faExclamationTriangle,
+  error: faCircleXmark,
+};
+
+export const databaseCredentialTypeLabelMapping: Record<
+  z.infer<typeof adminDatabaseCredentialsSchema>['type'],
+  () => string
+> = {
+  connection_string: () =>
+    getTranslations().t('pages.admin.databaseHosts.tabs.general.page.enum.credentialType.connectionString', {}),
+  details: () => getTranslations().t('pages.admin.databaseHosts.tabs.general.page.enum.credentialType.details', {}),
+};
+
+export const eggRepositoryCredentialTypeLabelMapping: Record<
+  z.infer<typeof adminEggRepositoryCredentialsSchema>['type'],
+  () => string
+> = {
+  none: () => getTranslations().t('pages.admin.eggRepositories.tabs.general.page.enum.credentialType.none', {}),
+  password: () => getTranslations().t('pages.admin.eggRepositories.tabs.general.page.enum.credentialType.password', {}),
+  private_key: () =>
+    getTranslations().t('pages.admin.eggRepositories.tabs.general.page.enum.credentialType.privateKey', {}),
+};
+
+export const backupDiskLabelMapping: Record<z.infer<typeof adminBackupConfigurationSchema>['backupDisk'], string> = {
+  local: 'Local',
+  s3: 'S3',
+  'ddup-bak': 'Ddup-Bak',
+  btrfs: 'Btrfs',
+  zfs: 'ZFS',
+  restic: 'Restic',
+  'proxmox-backup-server': 'Proxmox Backup Server',
+  kopia: 'Kopia',
+};
+
+export const storageDriverTypeLabelMapping: Record<z.infer<typeof adminSettingsStorageSchema>['type'], () => string> = {
+  filesystem: () => getTranslations().t('pages.admin.settings.tabs.storage.page.enum.driver.filesystem', {}),
+  s3: () => getTranslations().t('pages.admin.settings.tabs.storage.page.enum.driver.s3', {}),
+};
+
+export const mailModeTypeLabelMapping: Record<z.infer<typeof adminSettingsEmailSchema>['type'], () => string> = {
+  none: () => getTranslations().t('pages.admin.settings.tabs.mail.page.enum.provider.none', {}),
+  smtp: () => getTranslations().t('pages.admin.settings.tabs.mail.page.enum.provider.smtp', {}),
+  sendmail: () => getTranslations().t('pages.admin.settings.tabs.mail.page.enum.provider.sendmail', {}),
+  filesystem: () => getTranslations().t('pages.admin.settings.tabs.mail.page.enum.provider.filesystem', {}),
+};
+
+export const archiveFormatLabelMapping: Record<z.infer<typeof archiveFormat>, string> = {
+  tar: '.tar',
+  tar_gz: '.tar.gz',
+  tar_xz: '.tar.xz',
+  tar_lzip: '.tar.lz',
+  tar_bz2: '.tar.bz2',
+  tar_lz4: '.tar.lz4',
+  tar_zstd: '.tar.zst',
+  zip: '.zip',
+  seven_zip: '.7z',
+};
+
+export const transferArchiveFormatLabelMapping: Record<z.infer<typeof transferArchiveFormat>, string> = {
+  tar: '.tar',
+  tar_gz: '.tar.gz',
+  tar_xz: '.tar.xz',
+  tar_lzip: '.tar.lz',
+  tar_bz2: '.tar.bz2',
+  tar_lz4: '.tar.lz4',
+  tar_zstd: '.tar.zst',
+  itaf: '.itaf',
+  itaf_gz: '.itaf.gz',
+  itaf_xz: '.itaf.xz',
+  itaf_lzip: '.itaf.lz',
+  itaf_bz2: '.itaf.bz2',
+  itaf_lz4: '.itaf.lz4',
+  itaf_zstd: '.itaf.zst',
+};
+
+export const streamingArchiveFormatLabelMapping: Record<z.infer<typeof streamingArchiveFormat>, string> = {
+  tar: '.tar',
+  tar_gz: '.tar.gz',
+  tar_xz: '.tar.xz',
+  tar_lzip: '.tar.lz',
+  tar_bz2: '.tar.bz2',
+  tar_lz4: '.tar.lz4',
+  tar_zstd: '.tar.zst',
+  zip: '.zip',
+};
+
+export const compressionTypeLabelMapping: Record<z.infer<typeof compressionType>, string> = {
+  none: 'None',
+  gz: 'Gzip',
+  xz: 'XZ',
+  lzip: 'Lzip',
+  bz2: 'Bzip2',
+  lz4: 'LZ4',
+  zstd: 'Zstandard',
+};
+
+export const fingerprintAlgorithmLabelMapping: Record<z.infer<typeof fingerprintAlgorithm>, string> = {
+  md5: 'MD5',
+  crc32: 'CRC32',
+  sha1: 'SHA-1',
+  sha224: 'SHA-224',
+  sha256: 'SHA-256',
+  sha384: 'SHA-384',
+  sha512: 'SHA-512',
+  curseforge: 'CurseForge',
+};
+
+export const eggConfigurationDeploymentDefaultMapping: Record<
+  z.infer<typeof adminEggConfigurationDeploymentSchema>['mode']['type'],
+  z.infer<typeof adminEggConfigurationDeploymentSchema>['mode']
+> = {
+  random: {
+    type: 'random',
+  },
+  range: {
+    type: 'range',
+    startPort: 1,
+    endPort: 65535,
+  },
+  add_primary: {
+    type: 'add_primary',
+    value: 0,
+  },
+  subtract_primary: {
+    type: 'subtract_primary',
+    value: 0,
+  },
+  multiply_primary: {
+    type: 'multiply_primary',
+    value: 1,
+  },
+  divide_primary: {
+    type: 'divide_primary',
+    value: 1,
+  },
+};
+
+export const eggConfigurationDeploymentTypeLabelMapping: Record<
+  z.infer<typeof adminEggConfigurationDeploymentSchema>['mode']['type'],
+  () => string
+> = {
+  random: () => getTranslations().t('pages.admin.eggConfigurations.tabs.general.page.enum.deploymentType.random', {}),
+  range: () => getTranslations().t('pages.admin.eggConfigurations.tabs.general.page.enum.deploymentType.range', {}),
+  add_primary: () =>
+    getTranslations().t('pages.admin.eggConfigurations.tabs.general.page.enum.deploymentType.addPrimary', {}),
+  subtract_primary: () =>
+    getTranslations().t('pages.admin.eggConfigurations.tabs.general.page.enum.deploymentType.subtractPrimary', {}),
+  multiply_primary: () =>
+    getTranslations().t('pages.admin.eggConfigurations.tabs.general.page.enum.deploymentType.multiplyPrimary', {}),
+  divide_primary: () =>
+    getTranslations().t('pages.admin.eggConfigurations.tabs.general.page.enum.deploymentType.dividePrimary', {}),
+};
+
+export const oauthProviderMappingMatcherLabelMapping: Record<AdminOAuthProviderMappingMatcher['type'], () => string> = {
+  none: () => getTranslations().t('pages.admin.oAuthProviders.tabs.mappings.page.enum.matcherType.none', {}),
+  and: () => getTranslations().t('pages.admin.oAuthProviders.tabs.mappings.page.enum.matcherType.and', {}),
+  or: () => getTranslations().t('pages.admin.oAuthProviders.tabs.mappings.page.enum.matcherType.or', {}),
+  not: () => getTranslations().t('pages.admin.oAuthProviders.tabs.mappings.page.enum.matcherType.not', {}),
+  scopes: () => getTranslations().t('pages.admin.oAuthProviders.tabs.mappings.page.enum.matcherType.scopes', {}),
+  field_exists: () =>
+    getTranslations().t('pages.admin.oAuthProviders.tabs.mappings.page.enum.matcherType.fieldExists', {}),
+  field_equals: () =>
+    getTranslations().t('pages.admin.oAuthProviders.tabs.mappings.page.enum.matcherType.fieldEquals', {}),
+  field_contains: () =>
+    getTranslations().t('pages.admin.oAuthProviders.tabs.mappings.page.enum.matcherType.fieldContains', {}),
+  field_starts_with: () =>
+    getTranslations().t('pages.admin.oAuthProviders.tabs.mappings.page.enum.matcherType.fieldStartsWith', {}),
+  field_ends_with: () =>
+    getTranslations().t('pages.admin.oAuthProviders.tabs.mappings.page.enum.matcherType.fieldEndsWith', {}),
+};
+
+export const scheduleConditionLabelMapping: Record<
+  z.infer<typeof serverScheduleConditionSchema>['type'],
+  () => string
+> = {
+  none: () => getTranslations().t('pages.server.schedules.enum.scheduleConditionType.none', {}),
+  and: () => getTranslations().t('pages.server.schedules.enum.scheduleConditionType.and', {}),
+  or: () => getTranslations().t('pages.server.schedules.enum.scheduleConditionType.or', {}),
+  not: () => getTranslations().t('pages.server.schedules.enum.scheduleConditionType.not', {}),
+  server_state: () => getTranslations().t('pages.server.schedules.enum.scheduleConditionType.serverState', {}),
+  uptime: () => getTranslations().t('common.stat.uptime', {}),
+  resource_usage: () => getTranslations().t('pages.server.schedules.enum.scheduleConditionType.resourceUsage', {}),
+  file_exists: () => getTranslations().t('pages.server.schedules.enum.scheduleConditionType.fileExists', {}),
+  variable_exists: () => getTranslations().t('pages.server.schedules.enum.scheduleConditionType.variableExists', {}),
+  variable_contains: () =>
+    getTranslations().t('pages.server.schedules.enum.scheduleConditionType.variableContains', {}),
+  variable_equals: () => getTranslations().t('pages.server.schedules.enum.scheduleConditionType.variableEquals', {}),
+  variable_starts_with: () =>
+    getTranslations().t('pages.server.schedules.enum.scheduleConditionType.variableStartsWith', {}),
+  variable_ends_with: () =>
+    getTranslations().t('pages.server.schedules.enum.scheduleConditionType.variableEndsWith', {}),
+};
+
+export const scheduleResourceMetricLabelMapping: Record<z.infer<typeof serverScheduleResourceMetric>, () => string> = {
+  cpu: () => getTranslations().t('pages.server.schedules.enum.scheduleResourceMetric.cpu', {}),
+  memory: () => getTranslations().t('common.stat.memoryUsage', {}),
+  disk: () => getTranslations().t('common.stat.diskUsage', {}),
+};
+
+export const scheduleComparatorLabelMapping: Record<z.infer<typeof serverScheduleComparator>, () => string> = {
+  smaller_than: () => getTranslations().t('pages.server.schedules.enum.scheduleComparator.smallerThan', {}),
+  smaller_than_or_equals: () =>
+    getTranslations().t('pages.server.schedules.enum.scheduleComparator.smallerThanOrEqual', {}),
+  equal: () => getTranslations().t('pages.server.schedules.enum.scheduleComparator.equal', {}),
+  greater_than_or_equals: () =>
+    getTranslations().t('pages.server.schedules.enum.scheduleComparator.greaterThanOrEqual', {}),
+  greater_than: () => getTranslations().t('pages.server.schedules.enum.scheduleComparator.greaterThan', {}),
+};
+
+export const scheduleComparatorOperatorMapping: Record<z.infer<typeof serverScheduleComparator>, string> = {
+  smaller_than: '<',
+  smaller_than_or_equals: '<=',
+  equal: '==',
+  greater_than: '>',
+  greater_than_or_equals: '>=',
+};
+
+export const databaseFilterOperatorLabelMapping: Record<z.infer<typeof serverDatabaseFilterOperator>, () => string> = {
+  eq: () => getTranslations().t('pages.server.databases.explorer.enum.filterOperator.eq', {}),
+  ne: () => getTranslations().t('pages.server.databases.explorer.enum.filterOperator.ne', {}),
+  lt: () => getTranslations().t('pages.server.databases.explorer.enum.filterOperator.lt', {}),
+  lte: () => getTranslations().t('pages.server.databases.explorer.enum.filterOperator.lte', {}),
+  gt: () => getTranslations().t('pages.server.databases.explorer.enum.filterOperator.gt', {}),
+  gte: () => getTranslations().t('pages.server.databases.explorer.enum.filterOperator.gte', {}),
+  contains: () => getTranslations().t('pages.server.databases.explorer.enum.filterOperator.contains', {}),
+  starts_with: () => getTranslations().t('pages.server.databases.explorer.enum.filterOperator.startsWith', {}),
+  ends_with: () => getTranslations().t('pages.server.databases.explorer.enum.filterOperator.endsWith', {}),
+  is_null: () => getTranslations().t('pages.server.databases.explorer.enum.filterOperator.isNull', {}),
+  not_null: () => getTranslations().t('pages.server.databases.explorer.enum.filterOperator.notNull', {}),
+};
+
+export const databaseFilterOperatorSymbolMapping: Record<
+  z.infer<typeof serverDatabaseFilterOperator>,
+  string | null
+> = {
+  eq: '=',
+  ne: '≠',
+  lt: '<',
+  lte: '≤',
+  gt: '>',
+  gte: '≥',
+  contains: null,
+  starts_with: null,
+  ends_with: null,
+  is_null: null,
+  not_null: null,
+};
+
+export const serverPowerStateLabelMapping: Record<z.infer<typeof serverPowerState>, () => string> = {
+  running: () => getTranslations().t('common.enum.serverState.running', {}),
+  offline: () => getTranslations().t('common.enum.serverState.offline', {}),
+  starting: () => getTranslations().t('common.enum.serverState.starting', {}),
+  stopping: () => getTranslations().t('common.enum.serverState.stopping', {}),
+};
+
+export const serverPowerActionLabelMapping: Record<z.infer<typeof serverPowerAction>, () => string> = {
+  start: () => getTranslations().t('common.enum.serverPowerAction.start', {}),
+  stop: () => getTranslations().t('common.enum.serverPowerAction.stop', {}),
+  restart: () => getTranslations().t('common.enum.serverPowerAction.restart', {}),
+  kill: () => getTranslations().t('common.enum.serverPowerAction.kill', {}),
+};
+
+export const serverBackupStatusLabelMapping: Record<z.infer<typeof serverBackupStatus>, () => string> = {
+  starting: () => getTranslations().t('common.enum.serverBackupStatus.starting', {}),
+  finished: () => getTranslations().t('common.enum.serverBackupStatus.finished', {}),
+  failed: () => getTranslations().t('common.enum.serverBackupStatus.failed', {}),
+};
+
+export const serverFirewallRuleActionLabelMapping: Record<z.infer<typeof serverFirewallRuleAction>, () => string> = {
+  allow: () => getTranslations().t('common.enum.serverFirewallRuleAction.allow', {}),
+  deny: () => getTranslations().t('common.enum.serverFirewallRuleAction.deny', {}),
+};
+
+export const serverFirewallRuleActionColorMapping: Record<z.infer<typeof serverFirewallRuleAction>, string> = {
+  allow: 'green',
+  deny: 'red',
+};
+
+export const serverFirewallRuleProtocolLabelMapping: Record<z.infer<typeof serverFirewallRuleProtocol>, string> = {
+  tcp: 'TCP',
+  udp: 'UDP',
+};
+
+export const scheduleHttpMethodLabelMapping: Record<string, string> = {
+  get: 'GET',
+  post: 'POST',
+  put: 'PUT',
+  patch: 'PATCH',
+  delete: 'DELETE',
+  head: 'HEAD',
+};
+
+export const scheduleStepLabelMapping: Record<z.infer<typeof serverScheduleStepActionSchema>['type'], () => string> = {
+  sleep: () => getTranslations().t('pages.server.schedules.steps.sleep.title', {}),
+  ensure: () => getTranslations().t('pages.server.schedules.steps.ensure.title', {}),
+  if: () => getTranslations().t('pages.server.schedules.steps.if.title', {}),
+  else_if: () => getTranslations().t('pages.server.schedules.steps.elseIf.title', {}),
+  else: () => getTranslations().t('pages.server.schedules.steps.else.title', {}),
+  end_if: () => getTranslations().t('pages.server.schedules.steps.endIf.title', {}),
+  exit: () => getTranslations().t('pages.server.schedules.steps.exit.title', {}),
+  wait_for_state: () => getTranslations().t('pages.server.schedules.steps.waitForState.title', {}),
+  format: () => getTranslations().t('pages.server.schedules.steps.format.title', {}),
+  match_regex: () => getTranslations().t('pages.server.schedules.steps.matchRegex.title', {}),
+  wait_for_console_line: () => getTranslations().t('pages.server.schedules.steps.waitForConsoleLine.title', {}),
+  send_power: () => getTranslations().t('pages.server.schedules.steps.sendPower.title', {}),
+  send_command: () => getTranslations().t('pages.server.schedules.steps.sendCommand.title', {}),
+  create_backup: () => getTranslations().t('pages.server.schedules.steps.createBackup.title', {}),
+  restore_backup: () => getTranslations().t('pages.server.schedules.steps.restoreBackup.title', {}),
+  delete_backup: () => getTranslations().t('pages.server.schedules.steps.deleteBackup.title', {}),
+  move_backup: () => getTranslations().t('pages.server.schedules.steps.moveBackup.title', {}),
+  create_directory: () => getTranslations().t('pages.server.schedules.steps.createDirectory.title', {}),
+  write_file: () => getTranslations().t('pages.server.schedules.steps.writeFile.title', {}),
+  copy_file: () => getTranslations().t('pages.server.schedules.steps.copyFile.title', {}),
+  delete_files: () => getTranslations().t('pages.server.schedules.steps.deleteFiles.title', {}),
+  rename_files: () => getTranslations().t('pages.server.schedules.steps.renameFiles.title', {}),
+  compress_files: () => getTranslations().t('pages.server.schedules.steps.compressFiles.title', {}),
+  decompress_file: () => getTranslations().t('pages.server.schedules.steps.decompressFile.title', {}),
+  update_startup_variable: () => getTranslations().t('pages.server.schedules.steps.updateStartupVariable.title', {}),
+  update_startup_command: () => getTranslations().t('pages.server.schedules.steps.updateStartupCommand.title', {}),
+  update_startup_docker_image: () =>
+    getTranslations().t('pages.server.schedules.steps.updateStartupDockerImage.title', {}),
+  http_request: () => getTranslations().t('pages.server.schedules.steps.httpRequest.title', {}),
+};
+
+export type ScheduleStepGroup = 'server' | 'backups' | 'files' | 'startup' | 'advanced';
+
+export const scheduleStepGroupLabelMapping: Record<ScheduleStepGroup, () => string> = {
+  server: () => getTranslations().t('pages.server.schedules.steps.groups.server', {}),
+  backups: () => getTranslations().t('pages.server.schedules.steps.groups.backups', {}),
+  files: () => getTranslations().t('pages.server.schedules.steps.groups.files', {}),
+  startup: () => getTranslations().t('pages.server.schedules.steps.groups.startup', {}),
+  advanced: () => getTranslations().t('pages.server.schedules.steps.groups.advanced', {}),
+};
+
+export const scheduleStepGroupMapping: Record<
+  z.infer<typeof serverScheduleStepActionSchema>['type'],
+  ScheduleStepGroup
+> = {
+  sleep: 'advanced',
+  ensure: 'advanced',
+  if: 'advanced',
+  else_if: 'advanced',
+  else: 'advanced',
+  end_if: 'advanced',
+  exit: 'advanced',
+  wait_for_state: 'server',
+  format: 'advanced',
+  match_regex: 'advanced',
+  wait_for_console_line: 'advanced',
+  send_power: 'server',
+  send_command: 'server',
+  create_backup: 'backups',
+  restore_backup: 'backups',
+  delete_backup: 'backups',
+  move_backup: 'backups',
+  create_directory: 'files',
+  write_file: 'files',
+  copy_file: 'files',
+  delete_files: 'files',
+  rename_files: 'files',
+  compress_files: 'files',
+  decompress_file: 'files',
+  update_startup_variable: 'startup',
+  update_startup_command: 'startup',
+  update_startup_docker_image: 'startup',
+  http_request: 'advanced',
+};
+
+export const scheduleStepDescriptionMapping: Record<
+  z.infer<typeof serverScheduleStepActionSchema>['type'],
+  () => string
+> = {
+  sleep: () => getTranslations().t('pages.server.schedules.steps.sleep.description', {}),
+  ensure: () => getTranslations().t('pages.server.schedules.steps.ensure.description', {}),
+  if: () => getTranslations().t('pages.server.schedules.steps.if.description', {}),
+  else_if: () => getTranslations().t('pages.server.schedules.steps.elseIf.description', {}),
+  else: () => getTranslations().t('pages.server.schedules.steps.else.description', {}),
+  end_if: () => getTranslations().t('pages.server.schedules.steps.endIf.description', {}),
+  exit: () => getTranslations().t('pages.server.schedules.steps.exit.description', {}),
+  wait_for_state: () => getTranslations().t('pages.server.schedules.steps.waitForState.description', {}),
+  format: () => getTranslations().t('pages.server.schedules.steps.format.description', {}),
+  match_regex: () => getTranslations().t('pages.server.schedules.steps.matchRegex.description', {}),
+  wait_for_console_line: () => getTranslations().t('pages.server.schedules.steps.waitForConsoleLine.description', {}),
+  send_power: () => getTranslations().t('pages.server.schedules.steps.sendPower.description', {}),
+  send_command: () => getTranslations().t('pages.server.schedules.steps.sendCommand.description', {}),
+  create_backup: () => getTranslations().t('pages.server.schedules.steps.createBackup.description', {}),
+  restore_backup: () => getTranslations().t('pages.server.schedules.steps.restoreBackup.description', {}),
+  delete_backup: () => getTranslations().t('pages.server.schedules.steps.deleteBackup.description', {}),
+  move_backup: () => getTranslations().t('pages.server.schedules.steps.moveBackup.description', {}),
+  create_directory: () => getTranslations().t('pages.server.schedules.steps.createDirectory.description', {}),
+  write_file: () => getTranslations().t('pages.server.schedules.steps.writeFile.description', {}),
+  copy_file: () => getTranslations().t('pages.server.schedules.steps.copyFile.description', {}),
+  delete_files: () => getTranslations().t('pages.server.schedules.steps.deleteFiles.description', {}),
+  rename_files: () => getTranslations().t('pages.server.schedules.steps.renameFiles.description', {}),
+  compress_files: () => getTranslations().t('pages.server.schedules.steps.compressFiles.description', {}),
+  decompress_file: () => getTranslations().t('pages.server.schedules.steps.decompressFile.description', {}),
+  update_startup_variable: () =>
+    getTranslations().t('pages.server.schedules.steps.updateStartupVariable.description', {}),
+  update_startup_command: () =>
+    getTranslations().t('pages.server.schedules.steps.updateStartupCommand.description', {}),
+  update_startup_docker_image: () =>
+    getTranslations().t('pages.server.schedules.steps.updateStartupDockerImage.description', {}),
+  http_request: () => getTranslations().t('pages.server.schedules.steps.httpRequest.description', {}),
+};
+
+export const scheduleStepDefaultMapping: Record<
+  z.infer<typeof serverScheduleStepActionSchema>['type'],
+  z.infer<typeof serverScheduleStepActionSchema>
+> = {
+  sleep: {
+    type: 'sleep',
+    duration: 1000,
+  },
+  ensure: {
+    type: 'ensure',
+    condition: { type: 'none' },
+  },
+  if: {
+    type: 'if',
+    condition: { type: 'none' },
+  },
+  else_if: {
+    type: 'else_if',
+    condition: { type: 'none' },
+  },
+  else: {
+    type: 'else',
+  },
+  end_if: {
+    type: 'end_if',
+  },
+  exit: {
+    type: 'exit',
+    successful: true,
+  },
+  wait_for_state: {
+    type: 'wait_for_state',
+    ignoreFailure: false,
+    state: 'running',
+    timeout: 60000,
+  },
+  format: {
+    type: 'format',
+    format: '',
+    outputInto: { variable: '' },
+  },
+  match_regex: {
+    type: 'match_regex',
+    input: '',
+    regex: '',
+    outputInto: [],
+  },
+  wait_for_console_line: {
+    type: 'wait_for_console_line',
+    ignoreFailure: false,
+    contains: '',
+    caseInsensitive: false,
+    timeout: 5000,
+    outputInto: null,
+  },
+  send_power: {
+    type: 'send_power',
+    ignoreFailure: false,
+    action: 'start',
+  },
+  send_command: {
+    type: 'send_command',
+    ignoreFailure: false,
+    command: '',
+  },
+  create_backup: {
+    type: 'create_backup',
+    ignoreFailure: false,
+    foreground: false,
+    name: null,
+    ignoredFiles: [],
+    outputInto: null,
+  },
+  restore_backup: {
+    type: 'restore_backup',
+    ignoreFailure: false,
+    truncateDirectory: false,
+    restoreStartup: false,
+    backup: { mode: 'latest' },
+  },
+  delete_backup: {
+    type: 'delete_backup',
+    ignoreFailure: false,
+    backup: { mode: 'oldest' },
+  },
+  move_backup: {
+    type: 'move_backup',
+    ignoreFailure: false,
+    backup: { mode: 'oldest' },
+    backupGroupUuid: null,
+  },
+  create_directory: {
+    type: 'create_directory',
+    ignoreFailure: false,
+    root: '/',
+    name: '',
+  },
+  write_file: {
+    type: 'write_file',
+    ignoreFailure: false,
+    append: false,
+    file: '',
+    content: '',
+  },
+  copy_file: {
+    type: 'copy_file',
+    ignoreFailure: false,
+    foreground: false,
+    file: '',
+    destination: '',
+  },
+  delete_files: {
+    type: 'delete_files',
+    ignoreFailure: false,
+    root: '/',
+    files: [],
+  },
+  rename_files: {
+    type: 'rename_files',
+    ignoreFailure: false,
+    root: '/',
+    files: [],
+  },
+  compress_files: {
+    type: 'compress_files',
+    ignoreFailure: false,
+    foreground: false,
+    root: '/',
+    files: [],
+    format: 'tar_gz',
+    name: 'backup.tar.gz',
+  },
+  decompress_file: {
+    type: 'decompress_file',
+    ignoreFailure: false,
+    foreground: false,
+    root: '/',
+    file: '',
+  },
+  update_startup_variable: {
+    type: 'update_startup_variable',
+    ignoreFailure: false,
+    envVariable: '',
+    value: '',
+  },
+  update_startup_command: {
+    type: 'update_startup_command',
+    ignoreFailure: false,
+    command: '',
+  },
+  update_startup_docker_image: {
+    type: 'update_startup_docker_image',
+    ignoreFailure: false,
+    image: '',
+  },
+  http_request: {
+    type: 'http_request',
+    ignoreFailure: false,
+    method: 'post',
+    url: '',
+    headers: [],
+    body: null,
+    timeout: 10000,
+    ignoreErrorStatus: false,
+    outputStatusInto: null,
+    outputBodyInto: null,
+  },
+};
+
+export const scheduleStepIconMapping: Record<z.infer<typeof serverScheduleStepActionSchema>['type'], IconDefinition> = {
+  sleep: faHourglass,
+  ensure: faEquals,
+  if: faCodeBranch,
+  else_if: faCodeBranch,
+  else: faCodeBranch,
+  end_if: faCodeBranch,
+  exit: faRightFromBracket,
+  wait_for_state: faHourglass,
+  format: faTextSlash,
+  match_regex: faEquals,
+  wait_for_console_line: faTerminal,
+  send_power: faPowerOff,
+  send_command: faTerminal,
+  create_backup: faDatabase,
+  restore_backup: faClockRotateLeft,
+  delete_backup: faTrash,
+  move_backup: faRightLeft,
+  create_directory: faFolder,
+  write_file: faFile,
+  copy_file: faCopy,
+  delete_files: faTrash,
+  rename_files: faEdit,
+  compress_files: faCompress,
+  decompress_file: faExpand,
+  update_startup_variable: faGear,
+  update_startup_command: faCode,
+  update_startup_docker_image: faDocker,
+  http_request: faGlobe,
+};
+
+export const sshKeyProviderLabelMapping: Record<z.infer<typeof userSshKeyProvider>, string> = {
+  github: 'GitHub',
+  gitlab: 'GitLab',
+  launchpad: 'Launchpad',
+};
+
+export const permissionCategoryIconMapping: Record<string, IconDefinition> = {
+  stats: faChartPie,
+  'email-templates': faEnvelope,
+  account: faUser,
+  activity: faBriefcase,
+  allocations: faNetworkWired,
+  'api-keys': faCloud,
+  'command-snippets': faTerminal,
+  'backup-configurations': faFileZipper,
+  backups: faBoxArchive,
+  'backup-groups': faBoxArchive,
+  'system-backup-policies': faClockRotateLeft,
+  control: faTerminal,
+  announcements: faBullhorn,
+  'database-hosts': faDatabase,
+  databases: faDatabase,
+  'database-instances': faServer,
+  'database-agent-hosts': faServer,
+  'database-agent-templates': faCubes,
+  eggs: faEgg,
+  assets: faFolderOpen,
+  extensions: faPuzzlePiece,
+  files: faFolderOpen,
+  firewall: faShieldHalved,
+  locations: faEarthAmerica,
+  mounts: faFolder,
+  nests: faKiwiBird,
+  'egg-configurations': faCogs,
+  'egg-repositories': faDownload,
+  'oauth-providers': faFingerprint,
+  nodes: faServer,
+  roles: faScroll,
+  schedules: faStopwatch,
+  'security-keys': faUnlockKeyhole,
+  servers: faComputer,
+  sessions: faUserSecret,
+  settings: faCog,
+  'ssh-keys': faKey,
+  'oauth-links': faFingerprint,
+  startup: faPlay,
+  subusers: faUsers,
+  users: faUsers,
+};
+
+export const scheduleTriggerIconMapping: Record<z.infer<typeof serverScheduleTriggerSchema>['type'], IconDefinition> = {
+  cron: faStopwatch,
+  power_action: faPowerOff,
+  server_state: faServer,
+  backup_status: faBoxArchive,
+  schedule_completion: faStopwatch,
+  resource_usage: faChartPie,
+  console_line: faTerminal,
+  crash: faSkull,
+};
+
+export const scheduleTriggerColorMapping: Record<z.infer<typeof serverScheduleTriggerSchema>['type'], string> = {
+  cron: 'blue',
+  power_action: 'orange',
+  server_state: 'green',
+  backup_status: 'green',
+  schedule_completion: 'blue',
+  resource_usage: 'orange',
+  console_line: 'gray',
+  crash: 'red',
+};
+
+export const scheduleTriggerLabelMapping: Record<z.infer<typeof serverScheduleTriggerSchema>['type'], () => string> = {
+  cron: () => getTranslations().t('pages.server.schedules.triggers.cron.title', {}),
+  power_action: () => getTranslations().t('pages.server.schedules.triggers.powerAction.title', {}),
+  server_state: () => getTranslations().t('pages.server.schedules.triggers.serverState.title', {}),
+  backup_status: () => getTranslations().t('pages.server.schedules.triggers.backupStatus.title', {}),
+  schedule_completion: () => getTranslations().t('pages.server.schedules.triggers.scheduleCompletion.title', {}),
+  resource_usage: () => getTranslations().t('pages.server.schedules.triggers.resourceUsage.title', {}),
+  console_line: () => getTranslations().t('pages.server.schedules.triggers.consoleLine.title', {}),
+  crash: () => getTranslations().t('pages.server.schedules.triggers.crash.title', {}),
+};
+
+export const scheduleTriggerDefaultMapping: Record<
+  z.infer<typeof serverScheduleTriggerSchema>['type'],
+  z.infer<typeof serverScheduleTriggerSchema>
+> = {
+  cron: { type: 'cron', schedule: '0 0 0 * * *' },
+  power_action: { type: 'power_action', action: 'start' },
+  server_state: { type: 'server_state', state: 'running' },
+  backup_status: { type: 'backup_status', status: 'starting' },
+  schedule_completion: { type: 'schedule_completion', schedule: '', successful: true },
+  resource_usage: {
+    type: 'resource_usage',
+    metric: 'cpu',
+    comparator: 'greater_than',
+    value: 0,
+    forSeconds: 0,
+  },
+  console_line: { type: 'console_line', contains: '', caseInsensitive: false, outputInto: null },
+  crash: { type: 'crash' },
+};

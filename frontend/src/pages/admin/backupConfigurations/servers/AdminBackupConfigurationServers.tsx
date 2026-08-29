@@ -1,0 +1,52 @@
+import { z } from 'zod';
+import getBackupConfigurationServers from '@/api/admin/backup-configurations/servers/getBackupConfigurationServers.ts';
+import AdminSubContentContainer from '@/elements/containers/AdminSubContentContainer.tsx';
+import Table from '@/elements/Table.tsx';
+import { queryKeys } from '@/lib/queryKeys.ts';
+import { adminBackupConfigurationSchema } from '@/lib/schemas/admin/backupConfigurations.ts';
+import { serverTableColumns } from '@/lib/tableColumns.ts';
+import ServerRow from '@/pages/admin/servers/ServerRow.tsx';
+import { useSearchablePaginatedTable } from '@/plugins/useSearchablePaginatedTable.ts';
+import { useTranslations } from '@/providers/TranslationProvider.tsx';
+
+export default function AdminBackupConfigurationServers({
+  backupConfiguration,
+}: {
+  backupConfiguration: z.infer<typeof adminBackupConfigurationSchema>;
+}) {
+  const { t } = useTranslations();
+  const {
+    data: backupConfigurationServers,
+    loading,
+    error,
+    search,
+    setSearch,
+    setPage,
+  } = useSearchablePaginatedTable({
+    queryKey: queryKeys.admin.backupConfigurations.servers(backupConfiguration.uuid),
+    fetcher: (page, search) => getBackupConfigurationServers(backupConfiguration.uuid, page, search),
+  });
+
+  return (
+    <AdminSubContentContainer
+      title={t('pages.admin.backupConfigurations.tabs.servers.page.title', {})}
+      titleOrder={2}
+      search={search}
+      setSearch={setSearch}
+      registry={window.extensionContext.extensionRegistry.pages.admin.backupConfigurations.view.servers.subContainer}
+      registryProps={{ backupConfiguration }}
+    >
+      <Table
+        columns={serverTableColumns()}
+        loading={loading}
+        pagination={backupConfigurationServers}
+        onPageSelect={setPage}
+        error={error}
+      >
+        {backupConfigurationServers?.data.map((server) => (
+          <ServerRow key={server.uuid} server={server} />
+        ))}
+      </Table>
+    </AdminSubContentContainer>
+  );
+}

@@ -1,0 +1,77 @@
+import { faPlus } from '@fortawesome/free-solid-svg-icons';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { Route, Routes, useNavigate } from 'react-router';
+import getDatabaseHosts from '@/api/admin/database-hosts/getDatabaseHosts.ts';
+import Button from '@/elements/Button.tsx';
+import { AdminCan } from '@/elements/Can.tsx';
+import AdminContentContainer from '@/elements/containers/AdminContentContainer.tsx';
+import Table from '@/elements/Table.tsx';
+import { queryKeys } from '@/lib/queryKeys.ts';
+import { databaseHostTableColumns } from '@/lib/tableColumns.ts';
+import { useSearchablePaginatedTable } from '@/plugins/useSearchablePaginatedTable.ts';
+import { useTranslations } from '@/providers/TranslationProvider.tsx';
+import AdminPermissionGuard from '@/routers/guards/AdminPermissionGuard.tsx';
+import DatabaseHostCreateOrUpdate from './DatabaseHostCreateOrUpdate.tsx';
+import DatabaseHostRow from './DatabaseHostRow.tsx';
+import DatabaseHostView from './DatabaseHostView.tsx';
+
+function DatabaseHostsContainer() {
+  const { t } = useTranslations();
+  const navigate = useNavigate();
+
+  const {
+    data: databaseHosts,
+    loading,
+    error,
+    search,
+    setSearch,
+    setPage,
+  } = useSearchablePaginatedTable({
+    queryKey: queryKeys.admin.databaseHosts.all(),
+    fetcher: getDatabaseHosts,
+  });
+
+  return (
+    <AdminContentContainer
+      title={t('pages.admin.databaseHosts.title', {})}
+      registry={window.extensionContext.extensionRegistry.pages.admin.databaseHosts.container}
+      search={search}
+      setSearch={setSearch}
+      contentRight={
+        <AdminCan action='database-hosts.create'>
+          <Button
+            onClick={() => navigate('/admin/database-hosts/new')}
+            color='blue'
+            leftSection={<FontAwesomeIcon icon={faPlus} />}
+          >
+            {t('common.button.create', {})}
+          </Button>
+        </AdminCan>
+      }
+    >
+      <Table
+        columns={databaseHostTableColumns()}
+        loading={loading}
+        pagination={databaseHosts}
+        onPageSelect={setPage}
+        error={error}
+      >
+        {databaseHosts?.data.map((dh) => (
+          <DatabaseHostRow key={dh.uuid} databaseHost={dh} />
+        ))}
+      </Table>
+    </AdminContentContainer>
+  );
+}
+
+export default function AdminDatabaseHosts() {
+  return (
+    <Routes>
+      <Route path='/' element={<DatabaseHostsContainer />} />
+      <Route path='/:id/*' element={<DatabaseHostView />} />
+      <Route element={<AdminPermissionGuard permission='database-hosts.create' />}>
+        <Route path='/new' element={<DatabaseHostCreateOrUpdate />} />
+      </Route>
+    </Routes>
+  );
+}

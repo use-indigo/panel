@@ -1,0 +1,458 @@
+use crate::{
+    models::{InsertQueryBuilder, UpdateQueryBuilder},
+    prelude::*,
+};
+use garde::Validate;
+use serde::{Deserialize, Serialize};
+use sqlx::{Row, postgres::PgRow};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, LazyLock},
+};
+use utoipa::ToSchema;
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct UserCommandSnippet {
+    pub uuid: uuid::Uuid,
+    pub name: compact_str::CompactString,
+
+    pub eggs: Vec<uuid::Uuid>,
+    pub command: compact_str::CompactString,
+
+    pub created: chrono::NaiveDateTime,
+
+    extension_data: super::ModelExtensionData,
+}
+
+impl BaseModel for UserCommandSnippet {
+    const NAME: &'static str = "user_command_snippet";
+
+    fn get_extension_list() -> &'static super::ModelExtensionList {
+        static EXTENSIONS: LazyLock<super::ModelExtensionList> =
+            LazyLock::new(|| parking_lot::RwLock::new(Vec::new()));
+
+        &EXTENSIONS
+    }
+
+    fn get_extension_data(&self) -> &super::ModelExtensionData {
+        &self.extension_data
+    }
+
+    #[inline]
+    fn base_columns(prefix: Option<&str>) -> BTreeMap<&'static str, compact_str::CompactString> {
+        let prefix = prefix.unwrap_or_default();
+
+        BTreeMap::from([
+            (
+                "user_command_snippets.uuid",
+                compact_str::format_compact!("{prefix}uuid"),
+            ),
+            (
+                "user_command_snippets.name",
+                compact_str::format_compact!("{prefix}name"),
+            ),
+            (
+                "user_command_snippets.eggs",
+                compact_str::format_compact!("{prefix}eggs"),
+            ),
+            (
+                "user_command_snippets.command",
+                compact_str::format_compact!("{prefix}command"),
+            ),
+            (
+                "user_command_snippets.created",
+                compact_str::format_compact!("{prefix}created"),
+            ),
+        ])
+    }
+
+    #[inline]
+    fn map(prefix: Option<&str>, row: &PgRow) -> Result<Self, crate::database::DatabaseError> {
+        let prefix = prefix.unwrap_or_default();
+
+        Ok(Self {
+            uuid: row.try_get(compact_str::format_compact!("{prefix}uuid").as_str())?,
+            name: row.try_get(compact_str::format_compact!("{prefix}name").as_str())?,
+            eggs: row.try_get(compact_str::format_compact!("{prefix}eggs").as_str())?,
+            command: row.try_get(compact_str::format_compact!("{prefix}command").as_str())?,
+            created: row.try_get(compact_str::format_compact!("{prefix}created").as_str())?,
+            extension_data: Self::map_extensions(prefix, row)?,
+        })
+    }
+}
+
+impl UserCommandSnippet {
+    pub async fn by_user_uuid_uuid(
+        database: &crate::database::Database,
+        user_uuid: uuid::Uuid,
+        uuid: uuid::Uuid,
+    ) -> Result<Option<Self>, crate::database::DatabaseError> {
+        let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+            r#"
+            SELECT {}
+            FROM user_command_snippets
+            WHERE user_command_snippets.user_uuid = $1 AND user_command_snippets.uuid = $2
+            "#,
+            Self::columns_sql(None)
+        )))
+        .bind(user_uuid)
+        .bind(uuid)
+        .fetch_optional(database.read())
+        .await?;
+
+        row.try_map(|row| Self::map(None, &row))
+    }
+
+    pub async fn by_user_uuid_with_pagination(
+        database: &crate::database::Database,
+        user_uuid: uuid::Uuid,
+        page: i64,
+        per_page: i64,
+        search: Option<&str>,
+    ) -> Result<super::Pagination<Self>, crate::database::DatabaseError> {
+        let offset = (page - 1) * per_page;
+
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+            r#"
+            SELECT {}, COUNT(*) OVER() AS total_count
+            FROM user_command_snippets
+            WHERE user_command_snippets.user_uuid = $1 AND ($2 IS NULL OR user_command_snippets.name ILIKE '%' || $2 || '%')
+            ORDER BY user_command_snippets.created
+            LIMIT $3 OFFSET $4
+            "#,
+            Self::columns_sql(None)
+        )))
+        .bind(user_uuid)
+        .bind(search)
+        .bind(per_page)
+        .bind(offset)
+        .fetch_all(database.read())
+        .await?;
+
+        Ok(super::Pagination {
+            total: rows
+                .first()
+                .map_or(Ok(0), |row| row.try_get("total_count"))?,
+            per_page,
+            page,
+            data: rows
+                .into_iter()
+                .map(|row| Self::map(None, &row))
+                .try_collect_vec()?,
+        })
+    }
+
+    pub async fn all_by_user_uuid_nest_egg_uuid(
+        database: &crate::database::Database,
+        user_uuid: uuid::Uuid,
+        nest_egg_uuid: uuid::Uuid,
+    ) -> Result<Vec<Self>, crate::database::DatabaseError> {
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+            r#"
+            SELECT {}
+            FROM user_command_snippets
+            WHERE user_command_snippets.user_uuid = $1 AND ($2 = ANY(user_command_snippets.eggs) OR user_command_snippets.eggs = '{{}}'::uuid[])
+            ORDER BY user_command_snippets.created
+            "#,
+            Self::columns_sql(None)
+        )))
+        .bind(user_uuid)
+        .bind(nest_egg_uuid)
+        .fetch_all(database.read())
+        .await?;
+
+        rows.into_iter()
+            .map(|row| Self::map(None, &row))
+            .try_collect_vec()
+    }
+
+    pub async fn count_by_user_uuid(
+        database: &crate::database::Database,
+        user_uuid: uuid::Uuid,
+    ) -> Result<i64, sqlx::Error> {
+        sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM user_command_snippets
+            WHERE user_command_snippets.user_uuid = $1
+            "#,
+        )
+        .bind(user_uuid)
+        .fetch_one(database.read())
+        .await
+    }
+
+    pub async fn cleanup_uuid_arrays(
+        database: &crate::database::Database,
+    ) -> Result<u64, crate::database::DatabaseError> {
+        let result = sqlx::query(
+            "UPDATE user_command_snippets
+            SET eggs = COALESCE(
+                (SELECT array_agg(u) FROM unnest(eggs) AS u
+                WHERE EXISTS (SELECT 1 FROM nest_eggs WHERE uuid = u)),
+                '{}'::uuid[]
+            )
+            WHERE EXISTS (
+                SELECT 1 FROM unnest(eggs) AS u
+                WHERE NOT EXISTS (SELECT 1 FROM nest_eggs WHERE uuid = u)
+            )",
+        )
+        .execute(database.write())
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+}
+
+#[async_trait::async_trait]
+impl IntoApiObject for UserCommandSnippet {
+    type ApiObject = ApiUserCommandSnippet;
+    type ExtraArgs<'a> = ();
+
+    async fn into_api_object<'a>(
+        self,
+        state: &crate::State,
+        _args: Self::ExtraArgs<'a>,
+    ) -> Result<Self::ApiObject, crate::database::DatabaseError> {
+        let api_object = ApiUserCommandSnippet::init_hooks(&self, state).await?;
+
+        let api_object = finish_extendible!(
+            ApiUserCommandSnippet {
+                uuid: self.uuid,
+                name: self.name,
+                eggs: self.eggs,
+                command: self.command,
+                created: self.created.and_utc(),
+            },
+            api_object,
+            state
+        )?;
+
+        Ok(api_object)
+    }
+}
+
+#[derive(ToSchema, Deserialize, Validate)]
+pub struct CreateUserCommandSnippetOptions {
+    #[garde(skip)]
+    pub user_uuid: uuid::Uuid,
+
+    #[garde(length(chars, min = 1, max = 31))]
+    #[schema(min_length = 1, max_length = 31)]
+    pub name: compact_str::CompactString,
+
+    #[garde(length(max = 100))]
+    #[schema(max_length = 100)]
+    pub eggs: Vec<uuid::Uuid>,
+    #[garde(length(chars, min = 1, max = 1024))]
+    #[schema(min_length = 1, max_length = 1024)]
+    pub command: compact_str::CompactString,
+}
+
+#[async_trait::async_trait]
+impl CreatableModel for UserCommandSnippet {
+    type CreateOptions<'a> = CreateUserCommandSnippetOptions;
+    type CreateResult = Self;
+
+    fn get_create_handlers() -> &'static LazyLock<CreateListenerList<Self>> {
+        static CREATE_LISTENERS: LazyLock<CreateListenerList<UserCommandSnippet>> =
+            LazyLock::new(|| Arc::new(ModelHandlerList::default()));
+
+        &CREATE_LISTENERS
+    }
+
+    async fn create_with_transaction(
+        state: &crate::State,
+        mut options: Self::CreateOptions<'_>,
+        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<Self, crate::database::DatabaseError> {
+        options.validate()?;
+
+        let mut query_builder = InsertQueryBuilder::new("user_command_snippets");
+
+        Self::run_create_handlers(&mut options, &mut query_builder, state, transaction).await?;
+
+        query_builder
+            .set("user_uuid", options.user_uuid)
+            .set("name", &options.name)
+            .set("eggs", &options.eggs)
+            .set("command", &options.command);
+
+        let row = query_builder
+            .returning(&Self::columns_sql(None))
+            .fetch_one(&mut **transaction)
+            .await?;
+        let mut user_command_snippet = Self::map(None, &row)?;
+
+        Self::run_after_create_handlers(&mut user_command_snippet, &options, state, transaction)
+            .await?;
+
+        Ok(user_command_snippet)
+    }
+}
+
+#[derive(ToSchema, Serialize, Deserialize, Validate, Default)]
+pub struct UpdateUserCommandSnippetOptions {
+    #[garde(length(chars, min = 1, max = 31))]
+    #[schema(min_length = 1, max_length = 31, value_type = String)]
+    pub name: Option<compact_str::CompactString>,
+
+    #[garde(length(max = 100))]
+    #[schema(max_length = 100)]
+    pub eggs: Option<Vec<uuid::Uuid>>,
+    #[garde(length(chars, min = 1, max = 1024))]
+    #[schema(min_length = 1, max_length = 1024)]
+    pub command: Option<compact_str::CompactString>,
+}
+
+#[async_trait::async_trait]
+impl UpdatableModel for UserCommandSnippet {
+    type UpdateOptions = UpdateUserCommandSnippetOptions;
+
+    fn get_update_handlers() -> &'static LazyLock<UpdateHandlerList<Self>> {
+        static UPDATE_LISTENERS: LazyLock<UpdateHandlerList<UserCommandSnippet>> =
+            LazyLock::new(|| Arc::new(ModelHandlerList::default()));
+
+        &UPDATE_LISTENERS
+    }
+
+    async fn update_with_transaction(
+        &mut self,
+        state: &crate::State,
+        mut options: Self::UpdateOptions,
+        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), crate::database::DatabaseError> {
+        options.validate()?;
+
+        let mut query_builder = UpdateQueryBuilder::new("user_command_snippets");
+
+        self.run_update_handlers(&mut options, &mut query_builder, state, transaction)
+            .await?;
+
+        query_builder
+            .set("name", options.name.as_ref())
+            .set("eggs", options.eggs.as_ref())
+            .set("command", options.command.as_ref())
+            .where_eq("uuid", self.uuid);
+
+        query_builder.execute(&mut **transaction).await?;
+
+        if let Some(name) = options.name {
+            self.name = name;
+        }
+        if let Some(eggs) = options.eggs {
+            self.eggs = eggs;
+        }
+        if let Some(command) = options.command {
+            self.command = command;
+        }
+
+        self.run_after_update_handlers(state, transaction).await?;
+
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl DeletableModel for UserCommandSnippet {
+    type DeleteOptions = ();
+
+    fn get_delete_handlers() -> &'static LazyLock<DeleteHandlerList<Self>> {
+        static DELETE_LISTENERS: LazyLock<DeleteHandlerList<UserCommandSnippet>> =
+            LazyLock::new(|| Arc::new(ModelHandlerList::default()));
+
+        &DELETE_LISTENERS
+    }
+
+    async fn delete_with_transaction(
+        &self,
+        state: &crate::State,
+        options: Self::DeleteOptions,
+        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), anyhow::Error> {
+        self.run_delete_handlers(&options, state, transaction)
+            .await?;
+
+        sqlx::query(
+            r#"
+            DELETE FROM user_command_snippets
+            WHERE user_command_snippets.uuid = $1
+            "#,
+        )
+        .bind(self.uuid)
+        .execute(&mut **transaction)
+        .await?;
+
+        self.run_after_delete_handlers(&options, state, transaction)
+            .await?;
+
+        Ok(())
+    }
+}
+
+#[derive(Validate)]
+pub struct DuplicateUserCommandSnippetOptions {
+    #[garde(skip)]
+    pub user_uuid: uuid::Uuid,
+    #[garde(length(chars, min = 1, max = 31))]
+    pub name: compact_str::CompactString,
+}
+
+#[async_trait::async_trait]
+impl DuplicableModel for UserCommandSnippet {
+    type DuplicateOptions<'a> = DuplicateUserCommandSnippetOptions;
+
+    fn get_duplicate_handlers() -> &'static LazyLock<DuplicateHandlerList<Self>> {
+        static DUPLICATE_LISTENERS: LazyLock<DuplicateHandlerList<UserCommandSnippet>> =
+            LazyLock::new(|| Arc::new(ModelHandlerList::default()));
+
+        &DUPLICATE_LISTENERS
+    }
+
+    async fn duplicate_with_transaction(
+        &self,
+        state: &crate::State,
+        options: Self::DuplicateOptions<'_>,
+        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<Self, crate::database::DatabaseError> {
+        options.validate()?;
+
+        self.run_duplicate_handlers(&options, state, transaction)
+            .await?;
+
+        let mut query_builder = InsertQueryBuilder::new("user_command_snippets");
+
+        query_builder
+            .set("user_uuid", options.user_uuid)
+            .set("name", &options.name)
+            .set("eggs", &self.eggs)
+            .set("command", &self.command);
+
+        let row = query_builder
+            .returning(&Self::columns_sql(None))
+            .fetch_one(&mut **transaction)
+            .await?;
+        let mut user_command_snippet = Self::map(None, &row)?;
+
+        self.run_after_duplicate_handlers(&mut user_command_snippet, &options, state, transaction)
+            .await?;
+
+        Ok(user_command_snippet)
+    }
+}
+
+#[schema_extension_derive::extendible]
+#[init_args(UserCommandSnippet, crate::State)]
+#[hook_args(crate::State)]
+#[derive(ToSchema, Serialize)]
+#[schema(title = "UserCommandSnippet")]
+pub struct ApiUserCommandSnippet {
+    pub uuid: uuid::Uuid,
+
+    pub name: compact_str::CompactString,
+
+    pub eggs: Vec<uuid::Uuid>,
+    pub command: compact_str::CompactString,
+
+    pub created: chrono::DateTime<chrono::Utc>,
+}

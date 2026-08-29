@@ -1,0 +1,136 @@
+use super::State;
+use utoipa_axum::{router::OpenApiRouter, routes};
+
+mod put {
+    use axum::{extract::Query, http::StatusCode};
+    use compact_str::ToCompactString;
+    use futures_util::TryStreamExt;
+    use serde::{Deserialize, Serialize};
+    use shared::{
+        GetState,
+        models::{admin_activity::GetAdminActivityLogger, user::GetPermissionManager},
+        response::{ApiResponse, ApiResponseResult},
+    };
+    use utoipa::ToSchema;
+
+    #[derive(ToSchema, Serialize)]
+    struct Response {
+        extension: shared::extensions::PendingExtension,
+        needs_license_acceptance: bool,
+    }
+
+    #[derive(Deserialize)]
+    pub struct Params {
+        #[serde(default)]
+        accept_license: bool,
+    }
+
+    #[utoipa::path(put, path = "/", responses(
+        (status = OK, body = inline(Response)),
+    ), params(
+        (
+            "accept_license" = bool, Query,
+            description = "Whether to accept the extension's license (if there is one).",
+            example = "true",
+        ),
+    ))]
+    pub async fn route(
+        state: GetState,
+        permissions: GetPermissionManager,
+        activity_logger: GetAdminActivityLogger,
+        Query(params): Query<Params>,
+        body: axum::body::Body,
+    ) -> ApiResponseResult {
+        if !state.container_type.is_heavy() {
+            return ApiResponse::error(
+                "extension management is only available in the official heavy container",
+            )
+            .with_status(StatusCode::NOT_IMPLEMENTED)
+            .ok();
+        }
+
+        permissions.has_admin_permission("extensions.manage")?;
+
+        let distr = match shared::heavy::write_extension(&mut tokio_util::io::StreamReader::new(
+            body.into_data_stream().map_err(std::io::Error::other),
+        ))
+        .await
+        {
+            Ok(distr) => distr,
+            Err(err) => {
+                let (err, status) = shared::response::extract_readable_error(&err)
+                    .unwrap_or_else(|| (err.to_string(), StatusCode::BAD_REQUEST));
+
+                return ApiResponse::error(format!("failed to process extension archive: {err}"))
+                    .with_status(status)
+                    .ok();
+            }
+        };
+
+        if let Err(err) = distr.metadata_toml.check_panel_version(false) {
+            let _ = shared::heavy::remove_extension(&distr.metadata_toml.package_name).await;
+
+            return ApiResponse::error(format!("extension {err}"))
+                .with_status(StatusCode::BAD_REQUEST)
+                .ok();
+        }
+
+        if distr.metadata_toml.license_text.is_some() && !params.accept_license {
+            let _ = shared::heavy::remove_extension(&distr.metadata_toml.package_name).await;
+
+            return ApiResponse::new_serialized(Response {
+                extension: shared::extensions::PendingExtension {
+                    package_name: distr.metadata_toml.package_name.to_compact_string(),
+                    metadata_toml: distr.metadata_toml,
+                    description: distr.cargo_toml.package.description.into(),
+                    authors: distr
+                        .cargo_toml
+                        .package
+                        .authors
+                        .into_iter()
+                        .map(|a| a.into())
+                        .collect(),
+                    version: distr.cargo_toml.package.version,
+                },
+                needs_license_acceptance: true,
+            })
+            .ok();
+        }
+
+        activity_logger
+            .log(
+                "extension:upload",
+                serde_json::json!({
+                    "package_name": distr.metadata_toml.package_name,
+                    "name": distr.metadata_toml.name,
+                    "version": distr.cargo_toml.package.version,
+                    "authors": distr.cargo_toml.package.authors,
+                }),
+            )
+            .await;
+
+        ApiResponse::new_serialized(Response {
+            extension: shared::extensions::PendingExtension {
+                package_name: distr.metadata_toml.package_name.to_compact_string(),
+                metadata_toml: distr.metadata_toml,
+                description: distr.cargo_toml.package.description.into(),
+                authors: distr
+                    .cargo_toml
+                    .package
+                    .authors
+                    .into_iter()
+                    .map(|a| a.into())
+                    .collect(),
+                version: distr.cargo_toml.package.version,
+            },
+            needs_license_acceptance: false,
+        })
+        .ok()
+    }
+}
+
+pub fn router(state: &State) -> OpenApiRouter<State> {
+    OpenApiRouter::new()
+        .routes(routes!(put::route))
+        .with_state(state.clone())
+}

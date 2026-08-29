@@ -1,0 +1,345 @@
+use crate::{
+    models::{InsertQueryBuilder, UpdateQueryBuilder},
+    prelude::*,
+};
+use garde::Validate;
+use serde::{Deserialize, Serialize};
+use sqlx::{Row, postgres::PgRow};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, LazyLock},
+};
+use utoipa::ToSchema;
+
+#[derive(Serialize, Deserialize)]
+pub struct UserSshKey {
+    pub uuid: uuid::Uuid,
+
+    pub name: compact_str::CompactString,
+    pub fingerprint: compact_str::CompactString,
+
+    pub created: chrono::NaiveDateTime,
+
+    extension_data: super::ModelExtensionData,
+}
+
+impl BaseModel for UserSshKey {
+    const NAME: &'static str = "user_ssh_key";
+
+    fn get_extension_list() -> &'static super::ModelExtensionList {
+        static EXTENSIONS: LazyLock<super::ModelExtensionList> =
+            LazyLock::new(|| parking_lot::RwLock::new(Vec::new()));
+
+        &EXTENSIONS
+    }
+
+    fn get_extension_data(&self) -> &super::ModelExtensionData {
+        &self.extension_data
+    }
+
+    #[inline]
+    fn base_columns(prefix: Option<&str>) -> BTreeMap<&'static str, compact_str::CompactString> {
+        let prefix = prefix.unwrap_or_default();
+
+        BTreeMap::from([
+            (
+                "user_ssh_keys.uuid",
+                compact_str::format_compact!("{prefix}uuid"),
+            ),
+            (
+                "user_ssh_keys.name",
+                compact_str::format_compact!("{prefix}name"),
+            ),
+            (
+                "user_ssh_keys.fingerprint",
+                compact_str::format_compact!("{prefix}fingerprint"),
+            ),
+            (
+                "user_ssh_keys.created",
+                compact_str::format_compact!("{prefix}created"),
+            ),
+        ])
+    }
+
+    #[inline]
+    fn map(prefix: Option<&str>, row: &PgRow) -> Result<Self, crate::database::DatabaseError> {
+        let prefix = prefix.unwrap_or_default();
+
+        Ok(Self {
+            uuid: row.try_get(compact_str::format_compact!("{prefix}uuid").as_str())?,
+            name: row.try_get(compact_str::format_compact!("{prefix}name").as_str())?,
+            fingerprint: row
+                .try_get(compact_str::format_compact!("{prefix}fingerprint").as_str())?,
+            created: row.try_get(compact_str::format_compact!("{prefix}created").as_str())?,
+            extension_data: Self::map_extensions(prefix, row)?,
+        })
+    }
+}
+
+impl UserSshKey {
+    pub async fn by_user_uuid_uuid(
+        database: &crate::database::Database,
+        user_uuid: uuid::Uuid,
+        uuid: uuid::Uuid,
+    ) -> Result<Option<Self>, crate::database::DatabaseError> {
+        let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+            r#"
+            SELECT {}
+            FROM user_ssh_keys
+            WHERE user_ssh_keys.user_uuid = $1 AND user_ssh_keys.uuid = $2
+            "#,
+            Self::columns_sql(None)
+        )))
+        .bind(user_uuid)
+        .bind(uuid)
+        .fetch_optional(database.read())
+        .await?;
+
+        row.try_map(|row| Self::map(None, &row))
+    }
+
+    pub async fn by_user_uuid_with_pagination(
+        database: &crate::database::Database,
+        user_uuid: uuid::Uuid,
+        page: i64,
+        per_page: i64,
+        search: Option<&str>,
+    ) -> Result<super::Pagination<Self>, crate::database::DatabaseError> {
+        let offset = (page - 1) * per_page;
+
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+            r#"
+            SELECT {}, COUNT(*) OVER() AS total_count
+            FROM user_ssh_keys
+            WHERE user_ssh_keys.user_uuid = $1 AND ($2 IS NULL OR user_ssh_keys.name ILIKE '%' || $2 || '%')
+            ORDER BY user_ssh_keys.created
+            LIMIT $3 OFFSET $4
+            "#,
+            Self::columns_sql(None)
+        )))
+        .bind(user_uuid)
+        .bind(search)
+        .bind(per_page)
+        .bind(offset)
+        .fetch_all(database.read())
+        .await?;
+
+        Ok(super::Pagination {
+            total: rows
+                .first()
+                .map_or(Ok(0), |row| row.try_get("total_count"))?,
+            per_page,
+            page,
+            data: rows
+                .into_iter()
+                .map(|row| Self::map(None, &row))
+                .try_collect_vec()?,
+        })
+    }
+
+    pub async fn count_by_user_uuid(
+        database: &crate::database::Database,
+        user_uuid: uuid::Uuid,
+    ) -> Result<i64, sqlx::Error> {
+        sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM user_ssh_keys
+            WHERE user_ssh_keys.user_uuid = $1
+            "#,
+        )
+        .bind(user_uuid)
+        .fetch_one(database.read())
+        .await
+    }
+}
+
+#[async_trait::async_trait]
+impl IntoApiObject for UserSshKey {
+    type ApiObject = ApiUserSshKey;
+    type ExtraArgs<'a> = ();
+
+    async fn into_api_object<'a>(
+        self,
+        state: &crate::State,
+        _args: Self::ExtraArgs<'a>,
+    ) -> Result<Self::ApiObject, crate::database::DatabaseError> {
+        let api_object = ApiUserSshKey::init_hooks(&self, state).await?;
+
+        let api_object = finish_extendible!(
+            ApiUserSshKey {
+                uuid: self.uuid,
+                name: self.name,
+                fingerprint: self.fingerprint,
+                created: self.created.and_utc(),
+            },
+            api_object,
+            state
+        )?;
+
+        Ok(api_object)
+    }
+}
+
+#[derive(ToSchema, Deserialize, Validate)]
+pub struct CreateUserSshKeyOptions {
+    #[garde(skip)]
+    pub user_uuid: uuid::Uuid,
+
+    #[garde(length(chars, min = 3, max = 31))]
+    #[schema(min_length = 3, max_length = 31)]
+    pub name: compact_str::CompactString,
+
+    #[garde(skip)]
+    #[schema(value_type = String)]
+    #[serde(deserialize_with = "crate::deserialize::deserialize_public_key")]
+    pub public_key: russh::keys::PublicKey,
+}
+
+#[async_trait::async_trait]
+impl CreatableModel for UserSshKey {
+    type CreateOptions<'a> = CreateUserSshKeyOptions;
+    type CreateResult = Self;
+
+    fn get_create_handlers() -> &'static LazyLock<CreateListenerList<Self>> {
+        static CREATE_LISTENERS: LazyLock<CreateListenerList<UserSshKey>> =
+            LazyLock::new(|| Arc::new(ModelHandlerList::default()));
+
+        &CREATE_LISTENERS
+    }
+
+    async fn create_with_transaction(
+        state: &crate::State,
+        mut options: Self::CreateOptions<'_>,
+        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<Self, crate::database::DatabaseError> {
+        options.validate()?;
+
+        let mut query_builder = InsertQueryBuilder::new("user_ssh_keys");
+
+        Self::run_create_handlers(&mut options, &mut query_builder, state, transaction).await?;
+
+        query_builder
+            .set("user_uuid", options.user_uuid)
+            .set("name", &options.name)
+            .set(
+                "fingerprint",
+                options
+                    .public_key
+                    .fingerprint(russh::keys::HashAlg::Sha256)
+                    .to_string(),
+            )
+            .set(
+                "public_key",
+                options.public_key.to_bytes().map_err(anyhow::Error::from)?,
+            );
+
+        let row = query_builder
+            .returning(&Self::columns_sql(None))
+            .fetch_one(&mut **transaction)
+            .await?;
+        let mut ssh_key = Self::map(None, &row)?;
+
+        Self::run_after_create_handlers(&mut ssh_key, &options, state, transaction).await?;
+
+        Ok(ssh_key)
+    }
+}
+
+#[derive(ToSchema, Serialize, Deserialize, Validate, Default)]
+pub struct UpdateUserSshKeyOptions {
+    #[garde(length(chars, min = 3, max = 31))]
+    #[schema(min_length = 3, max_length = 31)]
+    pub name: Option<compact_str::CompactString>,
+}
+
+#[async_trait::async_trait]
+impl UpdatableModel for UserSshKey {
+    type UpdateOptions = UpdateUserSshKeyOptions;
+
+    fn get_update_handlers() -> &'static LazyLock<UpdateHandlerList<Self>> {
+        static UPDATE_LISTENERS: LazyLock<UpdateHandlerList<UserSshKey>> =
+            LazyLock::new(|| Arc::new(ModelHandlerList::default()));
+
+        &UPDATE_LISTENERS
+    }
+
+    async fn update_with_transaction(
+        &mut self,
+        state: &crate::State,
+        mut options: Self::UpdateOptions,
+        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), crate::database::DatabaseError> {
+        options.validate()?;
+
+        let mut query_builder = UpdateQueryBuilder::new("user_ssh_keys");
+
+        self.run_update_handlers(&mut options, &mut query_builder, state, transaction)
+            .await?;
+
+        query_builder
+            .set("name", options.name.as_ref())
+            .where_eq("uuid", self.uuid);
+
+        query_builder.execute(&mut **transaction).await?;
+
+        if let Some(name) = options.name {
+            self.name = name;
+        }
+
+        self.run_after_update_handlers(state, transaction).await?;
+
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl DeletableModel for UserSshKey {
+    type DeleteOptions = ();
+
+    fn get_delete_handlers() -> &'static LazyLock<DeleteHandlerList<Self>> {
+        static DELETE_LISTENERS: LazyLock<DeleteHandlerList<UserSshKey>> =
+            LazyLock::new(|| Arc::new(ModelHandlerList::default()));
+
+        &DELETE_LISTENERS
+    }
+
+    async fn delete_with_transaction(
+        &self,
+        state: &crate::State,
+        options: Self::DeleteOptions,
+        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), anyhow::Error> {
+        self.run_delete_handlers(&options, state, transaction)
+            .await?;
+
+        sqlx::query(
+            r#"
+            DELETE FROM user_ssh_keys
+            WHERE user_ssh_keys.uuid = $1
+            "#,
+        )
+        .bind(self.uuid)
+        .execute(&mut **transaction)
+        .await?;
+
+        self.run_after_delete_handlers(&options, state, transaction)
+            .await?;
+
+        Ok(())
+    }
+}
+
+#[schema_extension_derive::extendible]
+#[init_args(UserSshKey, crate::State)]
+#[hook_args(crate::State)]
+#[derive(ToSchema, Serialize)]
+#[schema(title = "UserSshKey")]
+pub struct ApiUserSshKey {
+    pub uuid: uuid::Uuid,
+
+    pub name: compact_str::CompactString,
+    pub fingerprint: compact_str::CompactString,
+
+    pub created: chrono::DateTime<chrono::Utc>,
+}

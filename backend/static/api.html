@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="darkreader-lock" />
+    <title>{{ settings.app.name }} API Documentation</title>
+  </head>
+
+  <body>
+    <div id="app"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.44.20"></script>
+
+    <script>
+      const appName = {{ settings.app.name | tojson }};
+      const appUrl = {{ settings.app.url | tojson }};
+
+      Scalar.createApiReference('#app', {
+        url: '/openapi.json',
+        telemetry: false,
+        hideClientButton: true,
+        servers: [
+          {
+            url: appUrl.replace(/\/$/, ''),
+            description: `${appName} API`,
+          },
+        ],
+        tagsSorter: (a, b) => {
+          const tagOrder = ['/api/auth', '/api/client', '/api/admin', '/api/remote'];
+          const tagComparison = tagOrder.indexOf(a.name) - tagOrder.indexOf(b.name);
+
+          return tagComparison;
+        },
+      });
+    </script>
+  </body>
+</html>

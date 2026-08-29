@@ -1,0 +1,71 @@
+import { faPlus } from '@fortawesome/free-solid-svg-icons';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { Route, Routes, useNavigate } from 'react-router';
+import getMounts from '@/api/admin/mounts/getMounts.ts';
+import Button from '@/elements/Button.tsx';
+import { AdminCan } from '@/elements/Can.tsx';
+import AdminContentContainer from '@/elements/containers/AdminContentContainer.tsx';
+import Table from '@/elements/Table.tsx';
+import { queryKeys } from '@/lib/queryKeys.ts';
+import { mountTableColumns } from '@/lib/tableColumns.ts';
+import MountView from '@/pages/admin/mounts/MountView.tsx';
+import { useSearchablePaginatedTable } from '@/plugins/useSearchablePaginatedTable.ts';
+import { useTranslations } from '@/providers/TranslationProvider.tsx';
+import AdminPermissionGuard from '@/routers/guards/AdminPermissionGuard.tsx';
+import MountCreateOrUpdate from './MountCreateOrUpdate.tsx';
+import MountRow from './MountRow.tsx';
+
+function MountsContainer() {
+  const { t } = useTranslations();
+  const navigate = useNavigate();
+
+  const {
+    data: mounts,
+    loading,
+    error,
+    search,
+    setSearch,
+    setPage,
+  } = useSearchablePaginatedTable({
+    queryKey: queryKeys.admin.mounts.all(),
+    fetcher: getMounts,
+  });
+
+  return (
+    <AdminContentContainer
+      title={t('pages.admin.mounts.title', {})}
+      registry={window.extensionContext.extensionRegistry.pages.admin.mounts.container}
+      search={search}
+      setSearch={setSearch}
+      contentRight={
+        <AdminCan action='mounts.create'>
+          <Button
+            onClick={() => navigate('/admin/mounts/new')}
+            color='blue'
+            leftSection={<FontAwesomeIcon icon={faPlus} />}
+          >
+            {t('common.button.create', {})}
+          </Button>
+        </AdminCan>
+      }
+    >
+      <Table columns={mountTableColumns()} loading={loading} pagination={mounts} onPageSelect={setPage} error={error}>
+        {mounts?.data.map((m) => (
+          <MountRow key={m.uuid} mount={m} />
+        ))}
+      </Table>
+    </AdminContentContainer>
+  );
+}
+
+export default function AdminMounts() {
+  return (
+    <Routes>
+      <Route path='/' element={<MountsContainer />} />
+      <Route path='/:id/*' element={<MountView />} />
+      <Route element={<AdminPermissionGuard permission='mounts.create' />}>
+        <Route path='/new' element={<MountCreateOrUpdate />} />
+      </Route>
+    </Routes>
+  );
+}

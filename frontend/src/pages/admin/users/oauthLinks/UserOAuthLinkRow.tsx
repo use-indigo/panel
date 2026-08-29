@@ -1,0 +1,106 @@
+import { faTrash } from '@fortawesome/free-solid-svg-icons';
+import { useQueryClient } from '@tanstack/react-query';
+import { useState } from 'react';
+import { z } from 'zod';
+import deleteUserOAuthLink from '@/api/admin/users/oauthLinks/deleteUserOAuthLink.ts';
+import { httpErrorToHuman } from '@/api/axios.ts';
+import Code from '@/elements/Code.tsx';
+import ContextMenu, { ContextMenuToggle } from '@/elements/ContextMenu.tsx';
+import ConfirmationModal from '@/elements/modals/ConfirmationModal.tsx';
+import { TableData, TableRow } from '@/elements/Table.tsx';
+import TableLink from '@/elements/TableLink.tsx';
+import FormattedTimestamp from '@/elements/time/FormattedTimestamp.tsx';
+import { queryKeys } from '@/lib/queryKeys.ts';
+import { adminFullUserSchema, adminUserOAuthLinkSchema } from '@/lib/schemas/admin/users.ts';
+import { useToast } from '@/providers/ToastProvider.tsx';
+import { useTranslations } from '@/providers/TranslationProvider.tsx';
+
+export default function UserOAuthLinkRow({
+  user,
+  userOAuthLink,
+}: {
+  user: z.infer<typeof adminFullUserSchema>;
+  userOAuthLink: z.infer<typeof adminUserOAuthLinkSchema>;
+}) {
+  const { addToast } = useToast();
+  const { t } = useTranslations();
+  const queryClient = useQueryClient();
+
+  const [openModal, setOpenModal] = useState<'edit' | 'delete' | null>(null);
+
+  const doDelete = async () => {
+    await deleteUserOAuthLink(user.uuid, userOAuthLink.uuid)
+      .then(() => {
+        setOpenModal(null);
+        queryClient.invalidateQueries({ queryKey: queryKeys.admin.users.oauthLinks(user.uuid) });
+        addToast(t('pages.admin.users.tabs.oauthLinks.page.toast.removed', {}), 'success');
+      })
+      .catch((msg) => {
+        addToast(httpErrorToHuman(msg), 'error');
+      });
+  };
+
+  return (
+    <>
+      <ConfirmationModal
+        opened={openModal === 'delete'}
+        onClose={() => setOpenModal(null)}
+        title={t('pages.admin.users.tabs.oauthLinks.page.modal.delete.title', {})}
+        confirm={t('common.button.delete', {})}
+        onConfirmed={doDelete}
+      >
+        {t('pages.admin.users.tabs.oauthLinks.page.modal.delete.content', {
+          provider: userOAuthLink.oauthProvider.name,
+          username: user.username,
+        }).md()}
+      </ConfirmationModal>
+
+      <ContextMenu
+        items={[
+          {
+            type: 'action',
+            icon: faTrash,
+            label: t('common.button.remove', {}),
+            onClick: () => setOpenModal('delete'),
+            color: 'red',
+          },
+        ]}
+        registry={window.extensionContext.extensionRegistry.pages.admin.users.view.oauthLinks.contextMenu}
+        registryProps={{ user, userOAuthLink }}
+      >
+        {({ items, openMenu }) => (
+          <TableRow
+            onContextMenu={(e) => {
+              e.preventDefault();
+              openMenu(e.clientX, e.clientY);
+            }}
+          >
+            <TableData>
+              <Code>{userOAuthLink.uuid}</Code>
+            </TableData>
+
+            <TableData>
+              <TableLink to={`/admin/oauth-providers/${userOAuthLink.oauthProvider.uuid}`}>
+                <Code>{userOAuthLink.oauthProvider.name}</Code>
+              </TableLink>
+            </TableData>
+
+            <TableData>
+              <Code>{userOAuthLink.identifier}</Code>
+            </TableData>
+
+            <TableData>
+              {!userOAuthLink.lastUsed ? t('common.na', {}) : <FormattedTimestamp timestamp={userOAuthLink.lastUsed} />}
+            </TableData>
+
+            <TableData>
+              <FormattedTimestamp timestamp={userOAuthLink.created} />
+            </TableData>
+
+            <ContextMenuToggle items={items} openMenu={openMenu} />
+          </TableRow>
+        )}
+      </ContextMenu>
+    </>
+  );
+}
